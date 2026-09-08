@@ -1,0 +1,67 @@
+---
+- name: CIS 5.4.2.7 - Ensure system accounts do not have a valid login shell
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    system_accounts:
+      - postgres
+      - gitlab-prometheus
+      - git
+      - gitlab-psql
+
+    nologin_shell: /usr/sbin/nologin
+
+  tasks:
+
+    - name: Check current shells before remediation
+      ansible.builtin.command:
+        argv:
+          - getent
+          - passwd
+          - "{{ item }}"
+      loop: "{{ system_accounts }}"
+      register: shells_before
+      changed_when: false
+      failed_when: false
+
+    - name: Display current account shells
+      ansible.builtin.debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ shells_before.results }}"
+
+    - name: Set nologin shell for Tenable reported service accounts
+      ansible.builtin.user:
+        name: "{{ item }}"
+        shell: "{{ nologin_shell }}"
+      loop: "{{ system_accounts }}"
+
+    - name: Verify final account shells
+      ansible.builtin.command:
+        argv:
+          - getent
+          - passwd
+          - "{{ item }}"
+      loop: "{{ system_accounts }}"
+      register: account_shells
+      changed_when: false
+      failed_when: false
+
+    - name: Display final account shells
+      ansible.builtin.debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ account_shells.results }}"
+
+    - name: Assert all accounts use nologin
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+          - item.stdout.split(':')[-1] == nologin_shell
+        success_msg: "PASS: {{ item.item }} uses {{ nologin_shell }}"
+        fail_msg: "FAIL: {{ item.item }} does not use {{ nologin_shell }}"
+      loop: "{{ account_shells.results }}"
+
+    - name: CIS 5.4.2.7 remediation completed
+      ansible.builtin.debug:
+        msg: "CIS 5.4.2.7 remediation completed successfully"

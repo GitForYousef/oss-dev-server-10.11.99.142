@@ -1,0 +1,92 @@
+---
+- name: CIS 5.1.14 - Ensure sshd LoginGraceTime is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Backup sshd_config
+      ansible.builtin.copy:
+        src: /etc/ssh/sshd_config
+        dest: /etc/ssh/sshd_config.cis-backup
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+        force: false
+
+    - name: Configure LoginGraceTime to 60 seconds
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^[[:space:]]*LoginGraceTime[[:space:]]+'
+        line: 'LoginGraceTime 60'
+        insertbefore: '^Include[[:space:]]'
+        state: present
+        backup: true
+      register: logingracetime_config
+
+    - name: Remove duplicate LoginGraceTime directives
+      ansible.builtin.shell: |
+        awk '
+        BEGIN { found=0 }
+        /^[[:space:]]*LoginGraceTime[[:space:]]+/ {
+            if (found == 0) {
+                print
+                found=1
+            }
+            next
+        }
+        { print }
+        ' /etc/ssh/sshd_config > /etc/ssh/sshd_config.cis.tmp
+
+        if ! cmp -s /etc/ssh/sshd_config /etc/ssh/sshd_config.cis.tmp; then
+            cat /etc/ssh/sshd_config.cis.tmp > /etc/ssh/sshd_config
+        fi
+
+        rm -f /etc/ssh/sshd_config.cis.tmp
+      args:
+        executable: /bin/bash
+      register: remove_duplicates
+      changed_when: false
+
+    - name: Validate sshd configuration
+      ansible.builtin.command:
+        cmd: /usr/sbin/sshd -t
+      register: sshd_test
+      changed_when: false
+
+    - name: Fail if sshd configuration is invalid
+      ansible.builtin.fail:
+        msg: "sshd configuration validation failed: {{ sshd_test.stderr }}"
+      when: sshd_test.rc != 0
+
+    - name: Restart sshd when LoginGraceTime configuration changed
+      ansible.builtin.systemd:
+        name: sshd
+        state: reloaded
+      when: logingracetime_config.changed
+
+    - name: Verify effective LoginGraceTime
+      ansible.builtin.shell: |
+        /usr/sbin/sshd -T | awk '$1 == "logingracetime" {print $2; exit}'
+      args:
+        executable: /bin/bash
+      register: effective_logingracetime
+      changed_when: false
+
+    - name: Display effective LoginGraceTime
+      ansible.builtin.debug:
+        msg: "Effective SSH LoginGraceTime: {{ effective_logingracetime.stdout }} seconds"
+
+    - name: Assert CIS 5.1.14 compliance
+      ansible.builtin.assert:
+        that:
+          - effective_logingracetime.stdout | int <= 60
+        success_msg: >-
+          CIS 5.1.14 compliant -
+          LoginGraceTime is {{ effective_logingracetime.stdout }} seconds
+        fail_msg: >-
+          CIS 5.1.14 FAILED -
+          LoginGraceTime is {{ effective_logingracetime.stdout }} seconds,
+          expected 60 seconds or less

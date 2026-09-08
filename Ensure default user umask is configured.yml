@@ -1,0 +1,183 @@
+---
+- name: CIS 5.4.3.3 - Ensure default user umask is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    # ============================================================
+    # 1. Find profile.d shell configuration files
+    # ============================================================
+    - name: Find all profile.d shell configuration files
+      ansible.builtin.find:
+        paths: /etc/profile.d
+        patterns: "*.sh"
+        file_type: file
+      register: profile_d_files
+
+    # ============================================================
+    # 2. Remove conflicting umask settings from profile.d
+    #    Keep only the required CIS umask 027
+    # ============================================================
+    - name: Comment out conflicting umask settings in profile.d
+      ansible.builtin.replace:
+        path: "{{ item.path }}"
+        regexp: '^([ \t]*)umask[ \t]+(?!0?027([ \t]*|$)).*$'
+        replace: '\1# CIS 5.4.3.3 disabled conflicting umask: \g<0>'
+        backup: true
+      loop: "{{ profile_d_files.files }}"
+      when: item.path != "/etc/profile.d/60-default_umask.sh"
+
+    # ============================================================
+    # 3. Create the required system-wide profile umask
+    # ============================================================
+    - name: Create CIS default umask configuration
+      ansible.builtin.copy:
+        dest: /etc/profile.d/60-default_umask.sh
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # CIS 5.4.3.3
+          # Ensure default user umask is configured
+          umask 027
+
+    # ============================================================
+    # 4. Check existing active UMASK entries in login.defs
+    # ============================================================
+    - name: Check active UMASK entries in /etc/login.defs
+      ansible.builtin.shell: |
+        grep -nE '^[[:space:]]*UMASK[[:space:]]+' /etc/login.defs || true
+      register: login_defs_before
+      changed_when: false
+
+    # ============================================================
+    # 5. Normalize /etc/login.defs
+    #
+    #    Comment ALL active UMASK entries first.
+    #    Then add exactly one UMASK 027.
+    #
+    #    This prevents situations such as:
+    #      UMASK 077
+    #      UMASK 027
+    #
+    #    which was the original Tenable failure.
+    # ============================================================
+    - name: Normalize UMASK configuration in /etc/login.defs
+      ansible.builtin.shell: |
+        set -e
+
+        cp -a /etc/login.defs /etc/login.defs.cis-5.4.3.3.bak
+
+        sed -ri 's/^([[:space:]]*UMASK[[:space:]]+)/# \1/' /etc/login.defs
+
+        printf '\nUMASK 027\n' >> /etc/login.defs
+      when: >
+        login_defs_before.stdout_lines | length != 1 or
+        login_defs_before.stdout is not search('^[0-9]+:UMASK[[:space:]]+027[[:space:]]*$')
+      changed_when: true
+
+    # ============================================================
+    # 6. Verify active UMASK entries in login.defs
+    # ============================================================
+    - name: Verify active UMASK entries in login.defs
+      ansible.builtin.shell: |
+        grep -nE '^[[:space:]]*UMASK[[:space:]]+' /etc/login.defs || true
+      register: login_defs_umask
+      changed_when: false
+
+    # ============================================================
+    # 7. Verify exactly one active UMASK 027
+    # ============================================================
+    - name: Verify exactly one active UMASK 027 exists
+      ansible.builtin.shell: |
+        grep -cE '^[[:space:]]*UMASK[[:space:]]+027[[:space:]]*$' /etc/login.defs
+      register: login_defs_umask_count
+      changed_when: false
+
+    # ============================================================
+    # 8. Verify there are no other active UMASK values
+    # ============================================================
+    - name: Verify no conflicting active UMASK exists in login.defs
+      ansible.builtin.shell: |
+        if grep -qE '^[[:space:]]*UMASK[[:space:]]+(?!027([[:space:]]*)$)' /etc/login.defs; then
+          exit 1
+        fi
+        exit 0
+      args:
+        executable: /bin/bash
+      register: login_defs_conflict
+      changed_when: false
+      failed_when: false
+
+    # ============================================================
+    # 9. Verify profile.d required umask
+    # ============================================================
+    - name: Verify profile.d contains required umask
+      ansible.builtin.shell: |
+        grep -RInE '^[[:space:]]*umask[[:space:]]+0?027([[:space:]]*)$' /etc/profile.d/*.sh
+      register: profile_umask
+      changed_when: false
+      failed_when: false
+
+    # ============================================================
+    # 10. Verify profile.d has no conflicting active umask
+    # ============================================================
+    - name: Verify no conflicting active umask exists in profile.d
+      ansible.builtin.shell: |
+        if grep -RInE '^[[:space:]]*umask[[:space:]]+' /etc/profile.d/*.sh 2>/dev/null |
+           grep -Ev ':[[:space:]]*umask[[:space:]]+0?027([[:space:]]*)$'; then
+          exit 1
+        fi
+        exit 0
+      args:
+        executable: /bin/bash
+      register: profile_umask_conflict
+      changed_when: false
+      failed_when: false
+
+    # ============================================================
+    # 11. Verify effective umask in a fresh login shell
+    # ============================================================
+    - name: Verify effective umask in fresh login shell
+      ansible.builtin.shell: |
+        env -i \
+          HOME=/root \
+          USER=root \
+          LOGNAME=root \
+          PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin \
+          /bin/bash --login -c 'umask'
+      register: effective_umask
+      changed_when: false
+
+    # ============================================================
+    # 12. Display final verification
+    # ============================================================
+    - name: Display final CIS 5.4.3.3 verification
+      ansible.builtin.debug:
+        msg:
+          - "Active /etc/login.defs UMASK: {{ login_defs_umask.stdout_lines }}"
+          - "Active UMASK 027 count: {{ login_defs_umask_count.stdout | trim }}"
+          - "login.defs conflict check: {{ 'PASS' if login_defs_conflict.rc == 0 else 'FAIL' }}"
+          - "profile.d required umask: {{ profile_umask.stdout_lines | default([]) }}"
+          - "profile.d conflicting umask check: {{ 'PASS' if profile_umask_conflict.rc == 0 else 'FAIL' }}"
+          - "Effective login shell umask: {{ effective_umask.stdout | trim }}"
+
+    # ============================================================
+    # 13. Final CIS compliance assertion
+    # ============================================================
+    - name: Assert CIS 5.4.3.3 compliance
+      ansible.builtin.assert:
+        that:
+          - login_defs_umask_count.stdout | trim == "1"
+          - login_defs_conflict.rc == 0
+          - profile_umask.rc == 0
+          - profile_umask_conflict.rc == 0
+          - effective_umask.stdout | trim == "0027"
+        success_msg: >-
+          CIS 5.4.3.3 COMPLIANT -
+          default user umask is correctly configured as 027
+        fail_msg: >-
+          CIS 5.4.3.3 FAILED -
+          conflicting or incorrect umask configuration remains

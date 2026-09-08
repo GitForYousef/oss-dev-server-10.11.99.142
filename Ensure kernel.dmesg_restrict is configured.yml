@@ -1,0 +1,75 @@
+---
+- name: CIS 1.5.5 - Ensure kernel.dmesg_restrict is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Create CIS kernel.dmesg_restrict configuration
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/60-kernel-dmesg-restrict.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # CIS 1.5.5
+          # Ensure kernel.dmesg_restrict is configured
+          kernel.dmesg_restrict = 1
+
+    - name: Remove broken GitLab sysctl symlink - kernel.sem
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.sem.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - kernel.shmall
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.shmall.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - kernel.shmmax
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.shmmax.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - net.core.somaxconn
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-net.core.somaxconn.conf
+        state: absent
+
+    - name: Apply sysctl configuration
+      ansible.builtin.command:
+        cmd: sysctl --system
+      register: sysctl_apply
+      changed_when: true
+
+    - name: Verify runtime kernel.dmesg_restrict
+      ansible.builtin.command:
+        cmd: sysctl -n kernel.dmesg_restrict
+      register: dmesg_restrict_runtime
+      changed_when: false
+
+    - name: Verify persistent kernel.dmesg_restrict configuration
+      ansible.builtin.shell: |
+        grep -RniE \
+          '^[[:space:]]*kernel\.dmesg_restrict[[:space:]]*=[[:space:]]*1[[:space:]]*$' \
+          /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null
+      register: dmesg_restrict_config
+      changed_when: false
+      failed_when: false
+
+    - name: Display kernel.dmesg_restrict verification
+      ansible.builtin.debug:
+        msg:
+          - "Runtime kernel.dmesg_restrict: {{ dmesg_restrict_runtime.stdout | trim }}"
+          - "Persistent configuration:"
+          - "{{ dmesg_restrict_config.stdout_lines }}"
+
+    - name: Assert CIS 1.5.5 compliance
+      ansible.builtin.assert:
+        that:
+          - dmesg_restrict_runtime.stdout | trim == "1"
+          - dmesg_restrict_config.rc == 0
+          - dmesg_restrict_config.stdout_lines | length >= 1
+        success_msg: "CIS 1.5.5 compliant - kernel.dmesg_restrict is configured to 1"
+        fail_msg: "CIS 1.5.5 failed - kernel.dmesg_restrict is not correctly configured"

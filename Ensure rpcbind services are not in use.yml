@@ -1,0 +1,54 @@
+---
+- name: CIS 2.1.12 - Ensure rpcbind services are not in use
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Stop rpcbind socket
+      ansible.builtin.systemd:
+        name: rpcbind.socket
+        state: stopped
+      failed_when: false
+
+    - name: Stop rpcbind service
+      ansible.builtin.systemd:
+        name: rpcbind.service
+        state: stopped
+      failed_when: false
+
+    - name: Remove rpcbind package
+      ansible.builtin.dnf:
+        name: rpcbind
+        state: absent
+
+    - name: Verify rpcbind package is absent
+      ansible.builtin.command:
+        cmd: rpm -q rpcbind
+      register: rpcbind_package
+      changed_when: false
+      failed_when: rpcbind_package.rc == 0
+
+    - name: Verify rpcbind socket is not active
+      ansible.builtin.command:
+        cmd: systemctl is-active rpcbind.socket
+      register: rpcbind_socket_status
+      changed_when: false
+      failed_when: false
+
+    - name: Verify rpcbind service is not active
+      ansible.builtin.command:
+        cmd: systemctl is-active rpcbind.service
+      register: rpcbind_service_status
+      changed_when: false
+      failed_when: false
+
+    - name: Assert CIS 2.1.12 compliance
+      ansible.builtin.assert:
+        that:
+          - rpcbind_package.rc != 0
+          - rpcbind_socket_status.stdout | trim != "active"
+          - rpcbind_service_status.stdout | trim != "active"
+        success_msg: "CIS 2.1.12 compliant - rpcbind services are not in use"
+        fail_msg: "CIS 2.1.12 is not correctly configured"

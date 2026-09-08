@@ -1,0 +1,53 @@
+---
+- name: CIS 5.2.3 - Ensure sudo log file exists
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Ensure sudo log file exists
+      ansible.builtin.file:
+        path: /var/log/sudo.log
+        state: touch
+        owner: root
+        group: root
+        mode: '0600'
+        modification_time: preserve
+        access_time: preserve
+
+    - name: Configure sudo logfile
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/99-cis-5.2.3
+        owner: root
+        group: root
+        mode: '0440'
+        content: |
+          Defaults logfile="/var/log/sudo.log"
+        validate: '/usr/sbin/visudo -cf %s'
+
+    - name: Verify sudo logfile configuration
+      ansible.builtin.shell:
+        cmd: |
+          /usr/bin/grep -rPi '^\h*Defaults\h+([^#]+,\h*)?logfile\h*=\h*("|'\'')?\H+("|'\'')?(,\h*\H+\h*)*\h*(#.*)?$' \
+            /etc/sudoers /etc/sudoers.d 2>/dev/null
+      register: sudo_logfile_config
+      changed_when: false
+      failed_when: sudo_logfile_config.rc != 0
+
+    - name: Verify sudo log file
+      ansible.builtin.stat:
+        path: /var/log/sudo.log
+      register: sudo_log_file
+
+    - name: Assert CIS 5.2.3 compliance
+      ansible.builtin.assert:
+        that:
+          - sudo_log_file.stat.exists
+          - sudo_logfile_config.rc == 0
+        success_msg: >-
+          CIS 5.2.3 compliant -
+          sudo logfile is configured at /var/log/sudo.log
+        fail_msg: >-
+          CIS 5.2.3 failed -
+          sudo logfile configuration or log file is missing

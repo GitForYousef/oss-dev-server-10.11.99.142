@@ -1,0 +1,33 @@
+---
+- name: CIS 3.3.1.15 - Disable IPv4 source routed packets by default
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Configure net.ipv4.conf.default.accept_source_route
+      ansible.posix.sysctl:
+        name: net.ipv4.conf.default.accept_source_route
+        value: '0'
+        state: present
+        sysctl_file: /etc/sysctl.d/60-ipv4-default-accept-source-route.conf
+        reload: false
+
+    - name: Apply default accept_source_route setting immediately
+      ansible.builtin.command:
+        cmd: sysctl -w net.ipv4.conf.default.accept_source_route=0
+      changed_when: false
+
+    - name: Verify runtime default accept_source_route value
+      ansible.builtin.command:
+        cmd: sysctl -n net.ipv4.conf.default.accept_source_route
+      register: accept_source_route_check
+      changed_when: false
+
+    - name: Verify CIS 3.3.1.15 compliance
+      ansible.builtin.assert:
+        that:
+          - accept_source_route_check.stdout | trim == '0'
+        fail_msg: "CIS 3.3.1.15 FAILED - default accept_source_route is not set to 0."
+        success_msg: "CIS 3.3.1.15 COMPLIANT - default accept_source_route is set to 0."

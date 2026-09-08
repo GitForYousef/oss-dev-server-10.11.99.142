@@ -1,0 +1,78 @@
+---
+- name: CIS 2.4.1.9 - Ensure access to crontab is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Check if crontab group exists
+      ansible.builtin.getent:
+        database: group
+        key: crontab
+      register: crontab_group
+      failed_when: false
+      changed_when: false
+
+    - name: Set cron access group
+      ansible.builtin.set_fact:
+        cron_group: "{{ 'crontab' if crontab_group.ansible_facts.getent_group is defined else 'root' }}"
+
+    - name: Create /etc/cron.allow with secure permissions
+      ansible.builtin.file:
+        path: /etc/cron.allow
+        state: touch
+        owner: root
+        group: "{{ cron_group }}"
+        mode: '0640'
+        modification_time: preserve
+        access_time: preserve
+
+    - name: Check if /etc/cron.deny exists
+      ansible.builtin.stat:
+        path: /etc/cron.deny
+      register: cron_deny
+
+    - name: Configure /etc/cron.deny permissions
+      ansible.builtin.file:
+        path: /etc/cron.deny
+        owner: root
+        group: "{{ cron_group }}"
+        mode: '0640'
+      when: cron_deny.stat.exists
+
+    - name: Verify /etc/cron.allow
+      ansible.builtin.stat:
+        path: /etc/cron.allow
+      register: cron_allow_verify
+
+    - name: Verify /etc/cron.deny
+      ansible.builtin.stat:
+        path: /etc/cron.deny
+      register: cron_deny_verify
+
+    - name: Display cron access configuration
+      ansible.builtin.debug:
+        msg:
+          - "/etc/cron.allow: {{ cron_allow_verify.stat.pw_name }}:{{ cron_allow_verify.stat.gr_name }} mode={{ cron_allow_verify.stat.mode }}"
+          - "/etc/cron.deny exists: {{ cron_deny_verify.stat.exists }}"
+          - "Expected: root:{{ cron_group }} mode=0640 or more restrictive"
+
+    - name: Assert /etc/cron.allow is secure
+      ansible.builtin.assert:
+        that:
+          - cron_allow_verify.stat.exists
+          - cron_allow_verify.stat.pw_name == "root"
+          - cron_allow_verify.stat.gr_name == cron_group
+          - (cron_allow_verify.stat.mode | int(base=8)) <= 640
+        success_msg: "CIS 2.4.1.9 compliant - /etc/cron.allow is correctly configured"
+        fail_msg: "CIS 2.4.1.9 failed - /etc/cron.allow permissions are incorrect"
+
+    - name: Assert /etc/cron.deny is secure when present
+      ansible.builtin.assert:
+        that:
+          - not cron_deny_verify.stat.exists or cron_deny_verify.stat.pw_name == "root"
+          - not cron_deny_verify.stat.exists or cron_deny_verify.stat.gr_name == cron_group
+          - not cron_deny_verify.stat.exists or (cron_deny_verify.stat.mode | int(base=8)) <= 640
+        success_msg: "CIS 2.4.1.9 compliant - cron.deny is correctly configured"
+        fail_msg: "CIS 2.4.1.9 failed - cron.deny permissions are incorrect"

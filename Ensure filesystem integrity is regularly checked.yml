@@ -1,0 +1,131 @@
+---
+- name: CIS 6.1.2 - Ensure filesystem integrity is regularly checked
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Check if AIDE is installed
+      ansible.builtin.command:
+        cmd: rpm -q aide
+      register: aide_package
+      changed_when: false
+      failed_when: false
+
+    - name: Install AIDE
+      ansible.builtin.dnf:
+        name: aide
+        state: present
+      when: aide_package.rc != 0
+
+    - name: Check if AIDE database exists
+      ansible.builtin.stat:
+        path: /var/lib/aide/aide.db.gz
+      register: aide_database
+
+    - name: Check if alternate AIDE database exists
+      ansible.builtin.stat:
+        path: /var/lib/aide/aide.db.new.gz
+      register: aide_new_database
+
+    - name: Initialize AIDE database
+      ansible.builtin.command:
+        cmd: aide --init
+      when:
+        - not aide_database.stat.exists
+        - not aide_new_database.stat.exists
+
+    - name: Install newly initialized AIDE database
+      ansible.builtin.command:
+        cmd: cp /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+      when:
+        - not aide_database.stat.exists
+        - aide_new_database.stat.exists
+
+    - name: Create AIDE systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/aidecheck.service
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Aide Check
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/sbin/aide --check
+
+          [Install]
+          WantedBy=multi-user.target
+      register: aide_service
+
+    - name: Create AIDE systemd timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/aidecheck.timer
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Aide check every day at 5AM
+
+          [Timer]
+          OnCalendar=*-*-* 05:00:00
+          Unit=aidecheck.service
+
+          [Install]
+          WantedBy=multi-user.target
+      register: aide_timer
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when:
+        - aide_service.changed or aide_timer.changed
+
+    - name: Enable AIDE service
+      ansible.builtin.systemd:
+        name: aidecheck.service
+        enabled: true
+
+    - name: Enable and start AIDE timer
+      ansible.builtin.systemd:
+        name: aidecheck.timer
+        enabled: true
+        state: started
+
+    - name: Verify AIDE timer is enabled
+      ansible.builtin.command:
+        cmd: systemctl is-enabled aidecheck.timer
+      register: aide_timer_enabled
+      changed_when: false
+
+    - name: Verify AIDE service is enabled
+      ansible.builtin.command:
+        cmd: systemctl is-enabled aidecheck.service
+      register: aide_service_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Verify AIDE timer is active
+      ansible.builtin.command:
+        cmd: systemctl is-active aidecheck.timer
+      register: aide_timer_active
+      changed_when: false
+
+    - name: Display AIDE status
+      ansible.builtin.debug:
+        msg:
+          - "AIDE timer enabled: {{ aide_timer_enabled.stdout }}"
+          - "AIDE service enabled: {{ aide_service_enabled.stdout }}"
+          - "AIDE timer active: {{ aide_timer_active.stdout }}"
+
+    - name: Assert CIS 6.1.2 compliance
+      ansible.builtin.assert:
+        that:
+          - aide_timer_enabled.stdout == "enabled"
+          - aide_timer_active.stdout == "active"
+        success_msg: "CIS 6.1.2 compliant - AIDE filesystem integrity check is scheduled"
+        fail_msg: "CIS 6.1.2 FAILED - AIDE check is not correctly scheduled"

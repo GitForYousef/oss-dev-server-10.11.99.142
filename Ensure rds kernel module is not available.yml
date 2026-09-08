@@ -1,0 +1,73 @@
+---
+- name: CIS 3.2.4 - Ensure rds kernel module is not available
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Check if rds kernel module is currently loaded
+      ansible.builtin.shell: |
+        lsmod | awk '$1 == "rds" {print}'
+      register: rds_loaded
+      changed_when: false
+
+    - name: Unload rds kernel module if currently loaded
+      ansible.builtin.command:
+        cmd: modprobe -r rds
+      when: rds_loaded.stdout | trim | length > 0
+      failed_when: false
+
+    - name: Create rds kernel module configuration
+      ansible.builtin.copy:
+        dest: /etc/modprobe.d/60-rds.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # CIS 3.2.4
+          # Ensure rds kernel module is not available
+          install rds /bin/false
+          blacklist rds
+
+    - name: Refresh module dependency information
+      ansible.builtin.command:
+        cmd: depmod -a
+      changed_when: true
+
+    - name: Verify rds is not currently loaded
+      ansible.builtin.shell: |
+        if lsmod | awk '$1 == "rds" {found=1} END {exit found ? 0 : 1}'; then
+          echo "FAIL: rds kernel module is loaded"
+          exit 1
+        else
+          echo "PASS: rds kernel module is not loaded"
+          exit 0
+        fi
+      register: rds_loaded_check
+      changed_when: false
+      failed_when: false
+
+    - name: Verify rds install/blacklist configuration
+      ansible.builtin.shell: |
+        modprobe --showconfig | grep -P '\b(install|blacklist)\s+rds\b'
+      register: rds_modprobe_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display rds module verification
+      ansible.builtin.debug:
+        msg:
+          - "{{ rds_loaded_check.stdout }}"
+          - "modprobe configuration:"
+          - "{{ rds_modprobe_check.stdout_lines }}"
+
+    - name: Assert CIS 3.2.4 compliance
+      ansible.builtin.assert:
+        that:
+          - rds_loaded_check.rc == 0
+          - rds_modprobe_check.rc == 0
+          - rds_modprobe_check.stdout is search('install\s+rds\s+/bin/false')
+          - rds_modprobe_check.stdout is search('blacklist\s+rds')
+        success_msg: "CIS 3.2.4 compliant - rds kernel module is not available"
+        fail_msg: "CIS 3.2.4 failed - rds kernel module requires review"

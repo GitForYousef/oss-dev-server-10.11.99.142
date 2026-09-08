@@ -1,0 +1,20 @@
+---
+- name: CIS 2.4.1.5 - Ensure access to /etc/cron.weekly is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Check if /etc/cron.weekly exists
+      ansible.builtin.stat:
+        path: /etc/cron.weekly
+      register: cron_weekly_dir
+
+    - name: Set ownership and permissions on /etc/cron.weekly
+      ansible.builtin.file:
+        path: /etc/cron.weekly
+        owner: root
+        group: root
+        mode: '0700'
+      when: cron_weekly_dir.stat.exists

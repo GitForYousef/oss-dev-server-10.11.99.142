@@ -1,0 +1,97 @@
+---
+- name: CIS 1.2.1.2 - Ensure gpgcheck is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Ensure global gpgcheck is enabled
+      ansible.builtin.shell: |
+        sed -i -E 's/^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*(0|false|no)[[:space:]]*$/gpgcheck=1/' \
+        /etc/dnf/dnf.conf
+      register: global_gpgcheck_fix
+      changed_when: true
+
+    - name: Check PGDG repository exists
+      ansible.builtin.stat:
+        path: /etc/yum.repos.d/pgdg-redhat-all.repo
+      register: pgdg_repo
+
+    - name: Fix all disabled gpgcheck entries in PGDG repository
+      ansible.builtin.shell: |
+        sed -i -E 's/^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*(0|false|no)[[:space:]]*$/gpgcheck=1/' \
+        /etc/yum.repos.d/pgdg-redhat-all.repo
+      when: pgdg_repo.stat.exists
+      register: pgdg_gpgcheck_fix
+      changed_when: true
+
+    - name: Find all YUM repository files
+      ansible.builtin.find:
+        paths: /etc/yum.repos.d
+        patterns: "*.repo"
+        file_type: file
+      register: repo_files
+
+    - name: Fix disabled gpgcheck entries in all YUM repositories
+      ansible.builtin.shell: |
+        sed -i -E 's/^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*(0|false|no)[[:space:]]*$/gpgcheck=1/' \
+        "{{ item.path }}"
+      loop: "{{ repo_files.files }}"
+      register: repo_gpgcheck_fix
+      changed_when: true
+
+    - name: Verify global gpgcheck
+      ansible.builtin.shell: |
+        grep -iE '^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*(1|true|yes)\b' \
+        /etc/dnf/dnf.conf
+      register: global_check
+      changed_when: false
+      failed_when: false
+
+    - name: Verify PGDG has no disabled gpgcheck
+      ansible.builtin.shell: |
+        grep -nE '^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*(0|false|no)[[:space:]]*$' \
+        /etc/yum.repos.d/pgdg-redhat-all.repo
+      register: pgdg_check
+      changed_when: false
+      failed_when: false
+
+    - name: Verify all repositories have no disabled gpgcheck
+      ansible.builtin.shell: |
+        grep -RniE \
+        '^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*(0|false|no)[[:space:]]*$' \
+        /etc/yum.repos.d/*.repo 2>/dev/null
+      register: all_repo_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display verification
+      ansible.builtin.debug:
+        msg:
+          - "Global gpgcheck: {{ global_check.stdout_lines }}"
+          - "PGDG disabled entries: {{ pgdg_check.stdout_lines }}"
+          - "All repository disabled entries: {{ all_repo_check.stdout_lines }}"
+
+    - name: Assert global gpgcheck is enabled
+      ansible.builtin.assert:
+        that:
+          - global_check.rc == 0
+        success_msg: "Global gpgcheck=1 is configured"
+        fail_msg: "Global gpgcheck is not configured"
+
+    - name: Assert PGDG repository is compliant
+      ansible.builtin.assert:
+        that:
+          - pgdg_check.rc != 0
+          - pgdg_check.stdout | trim == ""
+        success_msg: "PGDG repository is compliant - no gpgcheck=0 entries"
+        fail_msg: "PGDG repository still contains disabled gpgcheck entries"
+
+    - name: Assert all repositories are compliant
+      ansible.builtin.assert:
+        that:
+          - all_repo_check.rc != 0
+          - all_repo_check.stdout | trim == ""
+        success_msg: "CIS 1.2.1.2 compliant - all repositories have gpgcheck enabled"
+        fail_msg: "One or more repositories still contain disabled gpgcheck entries"

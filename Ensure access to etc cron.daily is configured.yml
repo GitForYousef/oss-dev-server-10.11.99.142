@@ -1,0 +1,20 @@
+---
+- name: CIS 2.4.1.4 - Ensure access to /etc/cron.daily is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Check if /etc/cron.daily exists
+      ansible.builtin.stat:
+        path: /etc/cron.daily
+      register: cron_daily_dir
+
+    - name: Set ownership and permissions on /etc/cron.daily
+      ansible.builtin.file:
+        path: /etc/cron.daily
+        owner: root
+        group: root
+        mode: '0700'
+      when: cron_daily_dir.stat.exists

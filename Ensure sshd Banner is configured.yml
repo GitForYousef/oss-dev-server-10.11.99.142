@@ -1,0 +1,67 @@
+---
+- name: CIS 5.1.7 - Ensure sshd Banner is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Configure remote login warning banner
+      ansible.builtin.copy:
+        dest: /etc/issue.net
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          Authorized users only. All activity may be monitored and reported.
+      register: banner_file
+
+    - name: Configure sshd Banner directive
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^\s*Banner\s+'
+        line: 'Banner /etc/issue.net'
+        insertbefore: '^\s*(Include|Match)\s+'
+        state: present
+      register: ssh_banner
+
+    - name: Validate sshd configuration
+      ansible.builtin.command:
+        cmd: sshd -t
+      changed_when: false
+
+    - name: Restart sshd if configuration changed
+      ansible.builtin.service:
+        name: sshd
+        state: restarted
+      when: ssh_banner.changed or banner_file.changed
+
+    - name: Verify effective SSH banner configuration
+      ansible.builtin.command:
+        cmd: sshd -T
+      register: sshd_effective
+      changed_when: false
+
+    - name: Display effective banner
+      ansible.builtin.shell:
+        cmd: "sshd -T | awk '$1 == \"banner\" {print $0}'"
+      register: banner_check
+      changed_when: false
+
+    - name: Display banner configuration
+      ansible.builtin.debug:
+        msg: "{{ banner_check.stdout }}"
+
+    - name: Verify banner does not contain OS escape sequences
+      ansible.builtin.shell:
+        cmd: "grep -Psi '(\\\\v|\\\\r|\\\\m|\\\\s)' /etc/issue.net || true"
+      register: banner_escape_check
+      changed_when: false
+
+    - name: Assert CIS 5.1.7 compliance
+      ansible.builtin.assert:
+        that:
+          - "'banner /etc/issue.net' in sshd_effective.stdout"
+          - banner_escape_check.stdout | trim == ''
+        fail_msg: "CIS 5.1.7 FAILED - SSH Banner is not correctly configured."
+        success_msg: "CIS 5.1.7 COMPLIANT - SSH Banner is configured correctly."

@@ -1,0 +1,105 @@
+---
+- name: CIS 2.4.2.1 - Ensure access to at is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Check if at package is installed
+      ansible.builtin.package_facts:
+        manager: auto
+
+    - name: Set at installed fact
+      ansible.builtin.set_fact:
+        at_installed: "{{ 'at' in ansible_facts.packages }}"
+
+    - name: Check if daemon group exists
+      ansible.builtin.getent:
+        database: group
+        key: daemon
+      register: daemon_group
+      failed_when: false
+      changed_when: false
+      when: at_installed
+
+    - name: Set at access group
+      ansible.builtin.set_fact:
+        at_group: "{{ 'daemon' if daemon_group.ansible_facts.getent_group is defined else 'root' }}"
+      when: at_installed
+
+    - name: Create /etc/at.allow with secure permissions
+      ansible.builtin.file:
+        path: /etc/at.allow
+        state: touch
+        owner: root
+        group: "{{ at_group }}"
+        mode: '0640'
+        modification_time: preserve
+        access_time: preserve
+      when: at_installed
+
+    - name: Check if /etc/at.deny exists
+      ansible.builtin.stat:
+        path: /etc/at.deny
+      register: at_deny
+      when: at_installed
+
+    - name: Configure /etc/at.deny permissions
+      ansible.builtin.file:
+        path: /etc/at.deny
+        owner: root
+        group: "{{ at_group }}"
+        mode: '0640'
+      when:
+        - at_installed
+        - at_deny.stat.exists
+
+    - name: Verify /etc/at.allow
+      ansible.builtin.stat:
+        path: /etc/at.allow
+      register: at_allow_verify
+      when: at_installed
+
+    - name: Verify /etc/at.deny
+      ansible.builtin.stat:
+        path: /etc/at.deny
+      register: at_deny_verify
+      when: at_installed
+
+    - name: Display at access configuration
+      ansible.builtin.debug:
+        msg:
+          - "at installed: {{ at_installed }}"
+          - "/etc/at.allow: {{ at_allow_verify.stat.pw_name }}:{{ at_allow_verify.stat.gr_name }} mode={{ at_allow_verify.stat.mode }}"
+          - "/etc/at.deny exists: {{ at_deny_verify.stat.exists }}"
+          - "Expected owner: root"
+          - "Expected group: {{ at_group }}"
+          - "Expected mode: 0640 or more restrictive"
+      when: at_installed
+
+    - name: Assert /etc/at.allow is secure
+      ansible.builtin.assert:
+        that:
+          - at_allow_verify.stat.exists
+          - at_allow_verify.stat.pw_name == "root"
+          - at_allow_verify.stat.gr_name == at_group
+          - (at_allow_verify.stat.mode | int(base=8)) <= 640
+        success_msg: "CIS 2.4.2.1 compliant - /etc/at.allow is correctly configured"
+        fail_msg: "CIS 2.4.2.1 failed - /etc/at.allow permissions are incorrect"
+      when: at_installed
+
+    - name: Assert /etc/at.deny is secure when present
+      ansible.builtin.assert:
+        that:
+          - not at_deny_verify.stat.exists or at_deny_verify.stat.pw_name == "root"
+          - not at_deny_verify.stat.exists or at_deny_verify.stat.gr_name == at_group
+          - not at_deny_verify.stat.exists or (at_deny_verify.stat.mode | int(base=8)) <= 640
+        success_msg: "CIS 2.4.2.1 compliant - /etc/at.deny is correctly configured"
+        fail_msg: "CIS 2.4.2.1 failed - /etc/at.deny permissions are incorrect"
+      when: at_installed
+
+    - name: Display skip message when at is not installed
+      ansible.builtin.debug:
+        msg: "SKIPPED - at package is not installed"
+      when: not at_installed

@@ -1,0 +1,63 @@
+---
+- name: CIS 6.2.2.4 - Ensure journald Storage is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Create journald configuration directory
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Configure journald persistent storage and compression
+      ansible.builtin.copy:
+        dest: /etc/systemd/journald.conf.d/60-journald.conf
+        content: |
+          [Journal]
+          Compress=yes
+          Storage=persistent
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      register: journald_config
+
+    - name: Restart systemd-journald
+      ansible.builtin.command:
+        cmd: systemctl restart systemd-journald
+      when: journald_config.changed
+      changed_when: true
+
+    - name: Verify journald Storage configuration
+      ansible.builtin.shell:
+        cmd: |
+          systemd-analyze cat-config systemd/journald.conf systemd/journald.conf.d/* 2>/dev/null | grep -E '^Storage=persistent'
+      register: storage_check
+      changed_when: false
+      failed_when: false
+
+    - name: Verify journald Compress configuration
+      ansible.builtin.shell:
+        cmd: |
+          systemd-analyze cat-config systemd/journald.conf systemd/journald.conf.d/* 2>/dev/null | grep -E '^Compress=yes'
+      register: compress_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display journald configuration
+      ansible.builtin.debug:
+        msg:
+          - "Storage: {{ storage_check.stdout }}"
+          - "Compress: {{ compress_check.stdout }}"
+
+    - name: Assert CIS 6.2.2.4 compliance
+      ansible.builtin.assert:
+        that:
+          - storage_check.stdout is search('^Storage=persistent')
+        success_msg: "CIS 6.2.2.4 compliant - journald Storage=persistent is configured"
+        fail_msg: "CIS 6.2.2.4 FAILED - journald Storage=persistent is not configured"

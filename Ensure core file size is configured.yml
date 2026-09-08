@@ -1,0 +1,65 @@
+---
+- name: CIS 1.5.1 - Ensure core file size is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Find limits.d configuration files
+      ansible.builtin.find:
+        paths: /etc/security/limits.d
+        file_type: file
+        patterns:
+          - '*.conf'
+      register: limits_d_files
+
+    - name: Comment out hard core limits greater than 0 in limits.conf
+      ansible.builtin.replace:
+        path: /etc/security/limits.conf
+        regexp: '^(\s*\S+\s+hard\s+core\s+[1-9][0-9]*\s*)$'
+        replace: '# \1'
+        backup: true
+      failed_when: false
+
+    - name: Comment out hard core limits greater than 0 in limits.d
+      ansible.builtin.replace:
+        path: "{{ item.path }}"
+        regexp: '^(\s*\S+\s+hard\s+core\s+[1-9][0-9]*\s*)$'
+        replace: '# \1'
+        backup: true
+      loop: "{{ limits_d_files.files }}"
+      failed_when: false
+
+    - name: Create CIS core dump configuration
+      ansible.builtin.copy:
+        dest: /etc/security/limits.d/60-core-dump.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # CIS 1.5.1
+          # Ensure core file size is configured
+          * hard core 0
+
+    - name: Verify CIS hard core limit
+      ansible.builtin.shell: |
+        grep -nE '^[[:space:]]*\*[[:space:]]+hard[[:space:]]+core[[:space:]]+0[[:space:]]*$' \
+        /etc/security/limits.conf /etc/security/limits.d/*.conf
+      register: core_limit_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display core limit configuration
+      ansible.builtin.debug:
+        msg:
+          - "Core limit configuration:"
+          - "{{ core_limit_check.stdout_lines }}"
+
+    - name: Assert CIS 1.5.1 compliance
+      ansible.builtin.assert:
+        that:
+          - core_limit_check.stdout_lines | length >= 1
+        success_msg: "CIS 1.5.1 compliant - hard core file size is configured to 0"
+        fail_msg: "CIS 1.5.1 failed - '* hard core 0' was not found"
+

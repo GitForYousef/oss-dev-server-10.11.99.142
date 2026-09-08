@@ -1,0 +1,88 @@
+---
+- name: CIS 1.5.4 - Ensure fs.suid_dumpable is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Create CIS fs.suid_dumpable configuration
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/60-fs-suid-dumpable.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # CIS 1.5.4
+          # Ensure fs.suid_dumpable is configured
+          fs.suid_dumpable = 0
+
+    - name: Remove broken GitLab sysctl symlink - kernel.sem
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.sem.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - kernel.shmall
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.shmall.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - kernel.shmmax
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.shmmax.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - net.core.somaxconn
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-net.core.somaxconn.conf
+        state: absent
+
+    - name: Apply sysctl configuration
+      ansible.builtin.command:
+        cmd: sysctl --system
+      register: sysctl_apply
+      changed_when: true
+
+    - name: Verify runtime fs.suid_dumpable
+      ansible.builtin.command:
+        cmd: sysctl -n fs.suid_dumpable
+      register: suid_dumpable_runtime
+      changed_when: false
+
+    - name: Verify persistent fs.suid_dumpable configuration
+      ansible.builtin.shell: |
+        grep -RniE \
+          '^[[:space:]]*fs\.suid_dumpable[[:space:]]*=[[:space:]]*0[[:space:]]*$' \
+          /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null
+      register: suid_dumpable_config
+      changed_when: false
+      failed_when: false
+
+    - name: Verify broken GitLab sysctl symlinks are removed
+      ansible.builtin.shell: |
+        if ls -l /etc/sysctl.d/90-omnibus-gitlab-* >/dev/null 2>&1; then
+          echo "FAIL: Broken GitLab sysctl entries still exist"
+          ls -l /etc/sysctl.d/90-omnibus-gitlab-*
+          exit 1
+        else
+          echo "PASS: Broken GitLab sysctl entries removed"
+        fi
+      register: gitlab_symlink_check
+      changed_when: false
+
+    - name: Display CIS 1.5.4 verification
+      ansible.builtin.debug:
+        msg:
+          - "Runtime fs.suid_dumpable: {{ suid_dumpable_runtime.stdout | trim }}"
+          - "Persistent configuration: {{ suid_dumpable_config.stdout_lines }}"
+          - "{{ gitlab_symlink_check.stdout }}"
+
+    - name: Assert CIS 1.5.4 compliance
+      ansible.builtin.assert:
+        that:
+          - suid_dumpable_runtime.stdout | trim == "0"
+          - suid_dumpable_config.rc == 0
+          - suid_dumpable_config.stdout_lines | length >= 1
+          - gitlab_symlink_check.rc == 0
+        success_msg: "CIS 1.5.4 compliant - fs.suid_dumpable is configured to 0"
+        fail_msg: "CIS 1.5.4 failed - fs.suid_dumpable configuration requires review"

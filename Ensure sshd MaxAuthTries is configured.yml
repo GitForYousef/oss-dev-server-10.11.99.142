@@ -1,0 +1,43 @@
+---
+- name: CIS 5.1.16 - Ensure sshd MaxAuthTries is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Configure MaxAuthTries
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^[[:space:]]*MaxAuthTries[[:space:]]+'
+        line: 'MaxAuthTries 4'
+        insertbefore: '^[[:space:]]*Include[[:space:]]'
+        backup: true
+        validate: '/usr/sbin/sshd -t -f %s'
+
+    - name: Verify effective MaxAuthTries configuration
+      ansible.builtin.command:
+        cmd: /usr/sbin/sshd -T
+      register: sshd_effective_config
+      changed_when: false
+
+    - name: Extract effective MaxAuthTries
+      ansible.builtin.set_fact:
+        maxauthtries_value: >-
+          {{
+            sshd_effective_config.stdout
+            | regex_search('(?m)^maxauthtries\s+(\d+)', '\1')
+            | first
+            | default('')
+          }}
+
+    - name: Assert CIS 5.1.16 compliance
+      ansible.builtin.assert:
+        that:
+          - maxauthtries_value | int <= 4
+        success_msg: >-
+          CIS 5.1.16 compliant -
+          effective MaxAuthTries is {{ maxauthtries_value }}
+        fail_msg: >-
+          CIS 5.1.16 failed -
+          effective MaxAuthTries is {{ maxauthtries_value }}

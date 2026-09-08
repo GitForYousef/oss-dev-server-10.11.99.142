@@ -1,0 +1,96 @@
+---
+- name: CIS 1.5.7 - Ensure kernel.yama.ptrace_scope is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Create CIS kernel.yama.ptrace_scope configuration
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/60-kernel-yama-ptrace-scope.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # CIS 1.5.7
+          # Ensure kernel.yama.ptrace_scope is configured
+          kernel.yama.ptrace_scope = 1
+
+    - name: Check /etc/sysctl.conf for incorrect ptrace_scope setting
+      ansible.builtin.replace:
+        path: /etc/sysctl.conf
+        regexp: '^([[:space:]]*kernel\.yama\.ptrace_scope[[:space:]]*=[[:space:]]*)(0|[4-9]|1[0-9]+)([[:space:]]*)$'
+        replace: '# \g<0>'
+        backup: true
+      failed_when: false
+
+    - name: Find local sysctl configuration files
+      ansible.builtin.find:
+        paths: /etc/sysctl.d
+        patterns:
+          - '*.conf'
+        file_type: file
+        recurse: false
+      register: sysctl_files
+
+    - name: Comment out incorrect ptrace_scope settings in local sysctl files
+      ansible.builtin.replace:
+        path: "{{ item.path }}"
+        regexp: '^([[:space:]]*kernel\.yama\.ptrace_scope[[:space:]]*=[[:space:]]*)(0|[4-9]|1[0-9]+)([[:space:]]*)$'
+        replace: '# \g<0>'
+        backup: true
+      loop: "{{ sysctl_files.files }}"
+      when: item.path != '/etc/sysctl.d/60-kernel-yama-ptrace-scope.conf'
+      failed_when: false
+
+    - name: Apply sysctl configuration
+      ansible.builtin.command:
+        cmd: sysctl --system
+      register: sysctl_apply
+      changed_when: true
+
+    - name: Verify runtime kernel.yama.ptrace_scope
+      ansible.builtin.command:
+        cmd: sysctl -n kernel.yama.ptrace_scope
+      register: ptrace_scope_runtime
+      changed_when: false
+
+    - name: Verify local ptrace_scope configuration
+      ansible.builtin.shell: |
+        grep -RniE \
+          '^[[:space:]]*kernel\.yama\.ptrace_scope[[:space:]]*=[[:space:]]*(1|2|3)[[:space:]]*$' \
+          /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null
+      register: ptrace_scope_config
+      changed_when: false
+      failed_when: false
+
+    - name: Check for incorrect local ptrace_scope values
+      ansible.builtin.shell: |
+        if grep -RniE \
+          '^[[:space:]]*kernel\.yama\.ptrace_scope[[:space:]]*=[[:space:]]*(0|[4-9]|1[0-9]+)[[:space:]]*$' \
+          /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null; then
+          exit 1
+        else
+          exit 0
+        fi
+      register: ptrace_scope_bad
+      changed_when: false
+      failed_when: false
+
+    - name: Display kernel.yama.ptrace_scope verification
+      ansible.builtin.debug:
+        msg:
+          - "Runtime value: kernel.yama.ptrace_scope = {{ ptrace_scope_runtime.stdout | trim }}"
+          - "Valid persistent configuration: {{ ptrace_scope_config.stdout_lines }}"
+          - "Incorrect local values detected: {{ ptrace_scope_bad.rc != 0 }}"
+
+    - name: Assert CIS 1.5.7 compliance
+      ansible.builtin.assert:
+        that:
+          - ptrace_scope_runtime.stdout | trim in ['1', '2', '3']
+          - ptrace_scope_config.rc == 0
+          - ptrace_scope_config.stdout_lines | length >= 1
+          - ptrace_scope_bad.rc == 0
+        success_msg: "CIS 1.5.7 compliant - kernel.yama.ptrace_scope is configured correctly"
+        fail_msg: "CIS 1.5.7 failed - kernel.yama.ptrace_scope requires review"

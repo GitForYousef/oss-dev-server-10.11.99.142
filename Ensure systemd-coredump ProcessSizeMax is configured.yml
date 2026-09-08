@@ -1,0 +1,86 @@
+---
+- name: CIS 1.5.9 - Ensure systemd-coredump ProcessSizeMax is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Create systemd coredump configuration directory
+      ansible.builtin.file:
+        path: /etc/systemd/coredump.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Find existing systemd coredump configuration files
+      ansible.builtin.find:
+        paths: /etc/systemd/coredump.conf.d
+        patterns:
+          - '*.conf'
+        file_type: file
+      register: coredump_conf_files
+
+    - name: Comment out existing ProcessSizeMax settings
+      ansible.builtin.replace:
+        path: "{{ item.path }}"
+        regexp: '^(\s*[Pp]rocess[Ss]ize[Mm]ax\s*=.*)$'
+        replace: '# \1'
+        backup: true
+      loop: "{{ coredump_conf_files.files }}"
+      failed_when: false
+
+    - name: Create CIS 1.5.9 ProcessSizeMax configuration
+      ansible.builtin.copy:
+        dest: /etc/systemd/coredump.conf.d/60-process-size-max.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # CIS 1.5.9
+          # Ensure systemd-coredump ProcessSizeMax is configured
+          [Coredump]
+          ProcessSizeMax=0
+
+    - name: Reload systemd manager configuration
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart systemd-coredump socket
+      ansible.builtin.systemd:
+        name: systemd-coredump.socket
+        state: restarted
+
+    - name: Verify ProcessSizeMax configuration
+      ansible.builtin.shell: |
+        grep -nE '^[[:space:]]*ProcessSizeMax[[:space:]]*=[[:space:]]*0[[:space:]]*$' \
+        /etc/systemd/coredump.conf.d/*.conf
+      register: process_size_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display ProcessSizeMax configuration
+      ansible.builtin.debug:
+        var: process_size_check.stdout_lines
+
+    - name: Check effective ProcessSizeMax configuration
+      ansible.builtin.shell: |
+        systemd-analyze cat-config systemd/coredump.conf | \
+        grep -E '^[[:space:]]*ProcessSizeMax[[:space:]]*='
+      register: effective_process_size
+      changed_when: false
+      failed_when: false
+
+    - name: Display effective ProcessSizeMax
+      ansible.builtin.debug:
+        var: effective_process_size.stdout_lines
+
+    - name: Assert CIS 1.5.9 compliance
+      ansible.builtin.assert:
+        that:
+          - process_size_check.rc == 0
+          - process_size_check.stdout_lines | length >= 1
+          - effective_process_size.stdout is search('ProcessSizeMax=0')
+        success_msg: "CIS 1.5.9 compliant - ProcessSizeMax is configured to 0"
+        fail_msg: "CIS 1.5.9 failed - ProcessSizeMax is not configured to 0"

@@ -1,0 +1,64 @@
+---
+- name: CIS 1.1.1.5 - Ensure jffs2 kernel module is not available
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+
+    - name: Check if jffs2 module is currently loaded
+      ansible.builtin.shell: |
+        lsmod | awk '$1 == "jffs2" {print $1}'
+      register: jffs2_loaded
+      changed_when: false
+
+    - name: Unload jffs2 kernel module
+      ansible.builtin.command:
+        cmd: modprobe -r jffs2
+      when: jffs2_loaded.stdout == "jffs2"
+      failed_when: false
+
+    - name: Remove jffs2 kernel module using rmmod if still loaded
+      ansible.builtin.command:
+        cmd: rmmod jffs2
+      when: jffs2_loaded.stdout == "jffs2"
+      failed_when: false
+
+    - name: Create modprobe configuration for jffs2
+      ansible.builtin.copy:
+        dest: /etc/modprobe.d/60-jffs2.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          install jffs2 /bin/false
+          blacklist jffs2
+
+    - name: Update initramfs
+      ansible.builtin.command:
+        cmd: update-initramfs -u
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Check jffs2 module status
+      ansible.builtin.shell: |
+        lsmod | awk '$1 == "jffs2" {print $1}'
+      register: jffs2_check
+      changed_when: false
+
+    - name: Verify jffs2 is not loaded
+      ansible.builtin.assert:
+        that:
+          - jffs2_check.stdout == ""
+        fail_msg: "jffs2 module is still loaded."
+        success_msg: "jffs2 module is not loaded."
+
+    - name: Verify jffs2 deny configuration
+      ansible.builtin.shell: |
+        grep -E '^[[:space:]]*(install jffs2 /bin/false|blacklist jffs2)[[:space:]]*$' \
+        /etc/modprobe.d/60-jffs2.conf
+      register: jffs2_config
+      changed_when: false
+
+    - name: Display jffs2 configuration
+      ansible.builtin.debug:
+        var: jffs2_config.stdout_lines

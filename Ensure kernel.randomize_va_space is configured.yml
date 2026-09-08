@@ -1,0 +1,89 @@
+---
+- name: CIS 1.5.8 - Ensure kernel.randomize_va_space is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Create CIS randomize_va_space configuration
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/60-kernel-randomize-va-space.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # CIS 1.5.8
+          # Ensure kernel.randomize_va_space is configured
+          kernel.randomize_va_space = 2
+
+    - name: Remove broken GitLab sysctl symlink - kernel.sem
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.sem.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - kernel.shmall
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.shmall.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - kernel.shmmax
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.shmmax.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - net.core.somaxconn
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-net.core.somaxconn.conf
+        state: absent
+
+    - name: Apply sysctl configuration
+      ansible.builtin.command:
+        cmd: sysctl --system
+      register: sysctl_apply
+      changed_when: true
+
+    - name: Verify runtime kernel.randomize_va_space
+      ansible.builtin.command:
+        cmd: sysctl -n kernel.randomize_va_space
+      register: randomize_va_space_runtime
+      changed_when: false
+
+    - name: Verify persistent randomize_va_space configuration
+      ansible.builtin.shell: |
+        grep -RniE \
+          '^[[:space:]]*kernel\.randomize_va_space[[:space:]]*=[[:space:]]*2[[:space:]]*$' \
+          /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null
+      register: randomize_va_space_config
+      changed_when: false
+      failed_when: false
+
+    - name: Check for incorrect randomize_va_space values
+      ansible.builtin.shell: |
+        if grep -RniE \
+          '^[[:space:]]*kernel\.randomize_va_space[[:space:]]*=[[:space:]]*(0|1|[3-9]|[1-9][0-9]+)[[:space:]]*$' \
+          /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null; then
+          exit 1
+        else
+          exit 0
+        fi
+      register: randomize_va_space_bad
+      changed_when: false
+      failed_when: false
+
+    - name: Display CIS 1.5.8 verification
+      ansible.builtin.debug:
+        msg:
+          - "Runtime kernel.randomize_va_space: {{ randomize_va_space_runtime.stdout | trim }}"
+          - "Persistent configuration: {{ randomize_va_space_config.stdout_lines }}"
+          - "Incorrect values detected: {{ randomize_va_space_bad.rc != 0 }}"
+
+    - name: Assert CIS 1.5.8 compliance
+      ansible.builtin.assert:
+        that:
+          - randomize_va_space_runtime.stdout | trim == "2"
+          - randomize_va_space_config.rc == 0
+          - randomize_va_space_config.stdout_lines | length >= 1
+          - randomize_va_space_bad.rc == 0
+        success_msg: "CIS 1.5.8 compliant - kernel.randomize_va_space is configured to 2"
+        fail_msg: "CIS 1.5.8 failed - kernel.randomize_va_space requires review"

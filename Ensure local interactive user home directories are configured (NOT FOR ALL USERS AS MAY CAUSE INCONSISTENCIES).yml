@@ -1,0 +1,205 @@
+---
+- name: CIS 7.2.8 - Ensure local interactive user home directories are configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    # ============================================================
+    # 1. Get local interactive users
+    # ============================================================
+    - name: Get local interactive users
+      ansible.builtin.shell: |
+        awk -F: '
+          $7 != "/sbin/nologin" &&
+          $7 != "/usr/sbin/nologin" &&
+          $7 != "/bin/false" &&
+          $7 != "/usr/bin/false" &&
+          $7 != "" {
+            print $1 ":" $6 ":" $3 ":" $4 ":" $7
+          }
+        ' /etc/passwd
+      register: interactive_users
+      changed_when: false
+
+    # ============================================================
+    # 2. Build interactive user list
+    # ============================================================
+    - name: Build interactive user list
+      ansible.builtin.set_fact:
+        cis_interactive_users: >-
+          {{
+            interactive_users.stdout_lines
+            | map('split', ':')
+            | list
+          }}
+
+    # ============================================================
+    # 3. Display users
+    # ============================================================
+    - name: Display local interactive users
+      ansible.builtin.debug:
+        msg: "{{ cis_interactive_users }}"
+
+    # ============================================================
+    # 4. Check all home directories
+    # ============================================================
+    - name: Check interactive user home directories
+      ansible.builtin.stat:
+        path: "{{ item[1] }}"
+      loop: "{{ cis_interactive_users }}"
+      register: interactive_home_stats
+
+    # ============================================================
+    # 5. Create missing home directories
+    # ============================================================
+    - name: Create missing interactive user home directories
+      ansible.builtin.file:
+        path: "{{ item.item[1] }}"
+        state: directory
+        owner: "{{ item.item[0] }}"
+        group: "{{ item.item[3] }}"
+        mode: "0750"
+      loop: "{{ interactive_home_stats.results }}"
+      when:
+        - not item.stat.exists
+        - item.item[1] != ""
+        - item.item[1] != "/"
+
+    # ============================================================
+    # 6. Secure existing home directories
+    # ============================================================
+    - name: Secure interactive user home directories
+      ansible.builtin.file:
+        path: "{{ item.item[1] }}"
+        owner: "{{ item.item[0] }}"
+        group: "{{ item.item[3] }}"
+        mode: "0750"
+      loop: "{{ interactive_home_stats.results }}"
+      when:
+        - item.stat.exists
+        - item.stat.isdir
+        - item.item[1] != ""
+        - item.item[1] != "/"
+
+    # ============================================================
+    # 7. Re-check home directories
+    # ============================================================
+    - name: Verify interactive user home directories
+      ansible.builtin.stat:
+        path: "{{ item[1] }}"
+      loop: "{{ cis_interactive_users }}"
+      register: interactive_home_verify
+
+    # ============================================================
+    # 8. Run final audit for every interactive user
+    # ============================================================
+    - name: Audit interactive user home directories
+      ansible.builtin.shell: |
+        set -e
+
+        USERNAME="{{ item.item[0] }}"
+        HOME_DIR="{{ item.item[1] }}"
+
+        if [ -z "$HOME_DIR" ]; then
+          echo "FAIL: User \"$USERNAME\" has no home directory configured"
+          exit 1
+        fi
+
+        if [ "$HOME_DIR" = "/" ]; then
+          echo "FAIL: User \"$USERNAME\" has home directory \"/\""
+          exit 1
+        fi
+
+        if [ ! -d "$HOME_DIR" ]; then
+          echo "FAIL: User \"$USERNAME\" Home Directory: \"$HOME_DIR\" Doesn't exist"
+          exit 1
+        fi
+
+        OWNER=$(stat -Lc '%U' "$HOME_DIR")
+        MODE=$(stat -Lc '%a' "$HOME_DIR")
+
+        echo "User: $USERNAME"
+        echo "Home: $HOME_DIR"
+        echo "Owner: $OWNER"
+        echo "Mode: $MODE"
+
+        if [ "$OWNER" != "$USERNAME" ]; then
+          echo "FAIL: Incorrect owner"
+          exit 1
+        fi
+
+        # CIS 7.2.8:
+        # No group-write and no permissions for other users.
+        if [ $((8#$MODE & 0027)) -ne 0 ]; then
+          echo "FAIL: Excessive permissions"
+          exit 1
+        fi
+
+        echo "RESULT: PASS"
+      args:
+        executable: /bin/bash
+      loop: "{{ interactive_home_verify.results }}"
+      when:
+        - item.stat.exists
+        - item.stat.isdir
+        - item.item[1] != ""
+        - item.item[1] != "/"
+      register: home_directory_audit
+      changed_when: false
+      failed_when: false
+
+    # ============================================================
+    # 9. Check for missing home directories
+    # ============================================================
+    - name: Find remaining missing home directories
+      ansible.builtin.set_fact:
+        missing_home_directories: >-
+          {{
+            interactive_home_verify.results
+            | selectattr('stat.exists', 'equalto', false)
+            | list
+          }}
+
+    # ============================================================
+    # 10. Check audit failures
+    # ============================================================
+    - name: Find failed home directory audits
+      ansible.builtin.set_fact:
+        failed_home_audits: >-
+          {{
+            home_directory_audit.results
+            | selectattr('rc', 'defined')
+            | selectattr('rc', 'ne', 0)
+            | list
+          }}
+
+    # ============================================================
+    # 11. Display final verification
+    # ============================================================
+    - name: Display CIS 7.2.8 verification
+      ansible.builtin.debug:
+        msg:
+          - "Interactive users found: {{ cis_interactive_users | length }}"
+          - "Missing home directories: {{ missing_home_directories | length }}"
+          - "Failed home directory audits: {{ failed_home_audits | length }}"
+          - "Home directory audit results: {{ home_directory_audit.results | default([]) }}"
+
+    # ============================================================
+    # 12. Final compliance assertion
+    # ============================================================
+    - name: Assert CIS 7.2.8 compliance
+      ansible.builtin.assert:
+        that:
+          - missing_home_directories | length == 0
+          - failed_home_audits | length == 0
+        success_msg: >-
+          CIS 7.2.8 COMPLIANT -
+          All local interactive user home directories exist,
+          are owned by the correct user, and have permissions
+          of 0750 or more restrictive.
+        fail_msg: >-
+          CIS 7.2.8 FAILED -
+          One or more local interactive user home directories
+          are missing, incorrectly owned, or have excessive permissions.

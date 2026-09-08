@@ -1,0 +1,58 @@
+---
+- name: CIS 6.2.3.4 - Ensure rsyslog log file creation mode is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Create rsyslog configuration directory
+      ansible.builtin.file:
+        path: /etc/rsyslog.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Configure rsyslog FileCreateMode
+      ansible.builtin.copy:
+        dest: /etc/rsyslog.d/60-filecreatemode.conf
+        content: |
+          $FileCreateMode 0640
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      register: rsyslog_file_mode
+
+    - name: Validate rsyslog configuration
+      ansible.builtin.command:
+        cmd: rsyslogd -N1
+      register: rsyslog_validation
+      changed_when: false
+
+    - name: Restart rsyslog when configuration changed
+      ansible.builtin.systemd:
+        name: rsyslog
+        state: restarted
+      when: rsyslog_file_mode.changed
+
+    - name: Verify FileCreateMode configuration
+      ansible.builtin.shell:
+        cmd: |
+          grep -RhsE '^[[:space:]]*\$FileCreateMode[[:space:]]+0[0246][024]0[[:space:]]*$' \
+          /etc/rsyslog.conf /etc/rsyslog.d/*.conf 2>/dev/null
+      register: filecreatemode_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display FileCreateMode configuration
+      ansible.builtin.debug:
+        msg: "{{ filecreatemode_check.stdout_lines }}"
+
+    - name: Assert CIS 6.2.3.4 compliance
+      ansible.builtin.assert:
+        that:
+          - "'$FileCreateMode 0640' in filecreatemode_check.stdout"
+        success_msg: "CIS 6.2.3.4 compliant - rsyslog FileCreateMode is 0640"
+        fail_msg: "CIS 6.2.3.4 FAILED - rsyslog FileCreateMode 0640 was not found"

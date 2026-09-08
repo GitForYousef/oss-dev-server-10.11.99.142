@@ -1,0 +1,33 @@
+---
+- name: CIS 3.3.1.11 - Ensure default secure ICMP redirects are disabled
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Configure net.ipv4.conf.default.secure_redirects
+      ansible.posix.sysctl:
+        name: net.ipv4.conf.default.secure_redirects
+        value: '0'
+        state: present
+        sysctl_file: /etc/sysctl.d/60-ipv4-default-secure-redirects.conf
+        reload: false
+
+    - name: Apply default secure_redirects setting immediately
+      ansible.builtin.command:
+        cmd: sysctl -w net.ipv4.conf.default.secure_redirects=0
+      changed_when: false
+
+    - name: Verify runtime default secure_redirects value
+      ansible.builtin.command:
+        cmd: sysctl -n net.ipv4.conf.default.secure_redirects
+      register: secure_redirects_check
+      changed_when: false
+
+    - name: Verify CIS 3.3.1.11 compliance
+      ansible.builtin.assert:
+        that:
+          - secure_redirects_check.stdout | trim == '0'
+        fail_msg: "CIS 3.3.1.11 FAILED - default secure_redirects is not set to 0."
+        success_msg: "CIS 3.3.1.11 COMPLIANT - default secure_redirects is set to 0."

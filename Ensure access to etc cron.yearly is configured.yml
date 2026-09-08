@@ -1,0 +1,15 @@
+---
+- name: CIS 2.4.1.7 - Ensure access to /etc/cron.yearly is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Create /etc/cron.yearly directory with secure permissions
+      ansible.builtin.file:
+        path: /etc/cron.yearly
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'

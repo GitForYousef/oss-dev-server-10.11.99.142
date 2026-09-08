@@ -1,0 +1,71 @@
+---
+- name: CIS 5.3.3.4.1 - Ensure pam_unix does not include nullok
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Check if authselect is installed
+      ansible.builtin.command:
+        cmd: which authselect
+      register: authselect_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if authselect is not available
+      ansible.builtin.fail:
+        msg: "authselect is not installed. PAM configuration must be reviewed manually."
+      when: authselect_check.rc != 0
+
+    - name: Check current authselect profile
+      ansible.builtin.command:
+        cmd: authselect current
+      register: authselect_current
+      changed_when: false
+
+    - name: Display current authselect profile
+      ansible.builtin.debug:
+        var: authselect_current.stdout_lines
+
+    - name: Enable authselect without-nullok feature
+      ansible.builtin.command:
+        cmd: authselect enable-feature without-nullok
+      register: authselect_feature
+      changed_when: "'Feature without-nullok is enabled' in authselect_feature.stdout or authselect_feature.rc == 0"
+
+    - name: Apply authselect changes
+      ansible.builtin.command:
+        cmd: authselect apply-changes
+      register: authselect_apply
+      changed_when: true
+
+    - name: Check password-auth for nullok
+      ansible.builtin.shell: |
+        grep -Pi '^\h*(auth|account|password|session)\h+(requisite|required|sufficient)\h+pam_unix\.so\h+([^#\n\r]+\h+)?nullok\b' \
+          /etc/pam.d/password-auth
+      register: password_auth_nullok
+      changed_when: false
+      failed_when: false
+
+    - name: Check system-auth for nullok
+      ansible.builtin.shell: |
+        grep -Pi '^\h*(auth|account|password|session)\h+(requisite|required|sufficient)\h+pam_unix\.so\h+([^#\n\r]+\h+)?nullok\b' \
+          /etc/pam.d/system-auth
+      register: system_auth_nullok
+      changed_when: false
+      failed_when: false
+
+    - name: Display PAM nullok verification
+      ansible.builtin.debug:
+        msg:
+          - "password-auth nullok entries: {{ password_auth_nullok.stdout_lines | default([]) }}"
+          - "system-auth nullok entries: {{ system_auth_nullok.stdout_lines | default([]) }}"
+
+    - name: Assert pam_unix does not contain nullok
+      ansible.builtin.assert:
+        that:
+          - password_auth_nullok.rc != 0
+          - system_auth_nullok.rc != 0
+        success_msg: "CIS 5.3.3.4.1 compliant - pam_unix does not contain nullok"
+        fail_msg: "CIS 5.3.3.4.1 failed - nullok is still present in pam_unix configuration"

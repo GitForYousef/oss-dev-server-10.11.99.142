@@ -1,0 +1,88 @@
+---
+- name: CIS 3.3.2.6 - Ensure net.ipv6.conf.default.accept_source_route is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Configure net.ipv6.conf.default.accept_source_route
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/60-ipv6-default-accept-source-route.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # CIS 3.3.2.6
+          # Ensure net.ipv6.conf.default.accept_source_route is configured
+          net.ipv6.conf.default.accept_source_route = 0
+
+    - name: Remove broken GitLab sysctl symlink - kernel.sem
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.sem.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - kernel.shmall
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.shmall.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - kernel.shmmax
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.shmmax.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - net.core.somaxconn
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-net.core.somaxconn.conf
+        state: absent
+
+    - name: Apply IPv6 default accept_source_route setting immediately
+      ansible.builtin.command:
+        cmd: sysctl -w net.ipv6.conf.default.accept_source_route=0
+      changed_when: false
+
+    - name: Verify runtime IPv6 default accept_source_route value
+      ansible.builtin.command:
+        cmd: sysctl -n net.ipv6.conf.default.accept_source_route
+      register: ipv6_default_accept_source_route_runtime
+      changed_when: false
+
+    - name: Verify persistent IPv6 default accept_source_route configuration
+      ansible.builtin.shell: |
+        grep -RniE \
+          '^[[:space:]]*net\.ipv6\.conf\.default\.accept_source_route[[:space:]]*=[[:space:]]*0[[:space:]]*$' \
+          /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null
+      register: ipv6_default_accept_source_route_config
+      changed_when: false
+      failed_when: false
+
+    - name: Check for incorrect IPv6 default accept_source_route values
+      ansible.builtin.shell: |
+        if grep -RniE \
+          '^[[:space:]]*net\.ipv6\.conf\.default\.accept_source_route[[:space:]]*=[[:space:]]*[1-9][0-9]*[[:space:]]*$' \
+          /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null; then
+          exit 1
+        else
+          exit 0
+        fi
+      register: ipv6_default_accept_source_route_bad
+      changed_when: false
+      failed_when: false
+
+    - name: Display CIS 3.3.2.6 verification
+      ansible.builtin.debug:
+        msg:
+          - "Runtime net.ipv6.conf.default.accept_source_route: {{ ipv6_default_accept_source_route_runtime.stdout | trim }}"
+          - "Persistent configuration: {{ ipv6_default_accept_source_route_config.stdout_lines }}"
+          - "Incorrect values detected: {{ ipv6_default_accept_source_route_bad.rc != 0 }}"
+
+    - name: Assert CIS 3.3.2.6 compliance
+      ansible.builtin.assert:
+        that:
+          - ipv6_default_accept_source_route_runtime.stdout | trim == "0"
+          - ipv6_default_accept_source_route_config.rc == 0
+          - ipv6_default_accept_source_route_config.stdout_lines | length >= 1
+          - ipv6_default_accept_source_route_bad.rc == 0
+        success_msg: "CIS 3.3.2.6 compliant - net.ipv6.conf.default.accept_source_route is configured to 0"
+        fail_msg: "CIS 3.3.2.6 failed - net.ipv6.conf.default.accept_source_route requires review"

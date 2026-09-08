@@ -1,0 +1,91 @@
+---
+- name: CIS 5.1.17 - Ensure sshd MaxStartups is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Backup sshd_config
+      ansible.builtin.copy:
+        src: /etc/ssh/sshd_config
+        dest: /etc/ssh/sshd_config.cis-backup
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+        force: false
+
+    - name: Configure MaxStartups to 10:30:60
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^[[:space:]]*MaxStartups[[:space:]]+'
+        line: 'MaxStartups 10:30:60'
+        insertbefore: '^Include[[:space:]]'
+        state: present
+        backup: true
+      register: maxstartups_config
+
+    - name: Remove duplicate MaxStartups directives
+      ansible.builtin.shell: |
+        awk '
+        BEGIN { found=0 }
+        /^[[:space:]]*MaxStartups[[:space:]]+/ {
+            if (found == 0) {
+                print
+                found=1
+            }
+            next
+        }
+        { print }
+        ' /etc/ssh/sshd_config > /etc/ssh/sshd_config.cis.tmp
+
+        if ! cmp -s /etc/ssh/sshd_config /etc/ssh/sshd_config.cis.tmp; then
+            cat /etc/ssh/sshd_config.cis.tmp > /etc/ssh/sshd_config
+        fi
+
+        rm -f /etc/ssh/sshd_config.cis.tmp
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Validate sshd configuration
+      ansible.builtin.command:
+        cmd: /usr/sbin/sshd -t
+      register: sshd_test
+      changed_when: false
+
+    - name: Fail if sshd configuration is invalid
+      ansible.builtin.fail:
+        msg: "sshd configuration validation failed: {{ sshd_test.stderr }}"
+      when: sshd_test.rc != 0
+
+    - name: Reload sshd when configuration changed
+      ansible.builtin.systemd:
+        name: sshd
+        state: reloaded
+      when: maxstartups_config.changed
+
+    - name: Verify effective MaxStartups
+      ansible.builtin.shell: |
+        /usr/sbin/sshd -T | awk '$1 == "maxstartups" {print $2; exit}'
+      args:
+        executable: /bin/bash
+      register: effective_maxstartups
+      changed_when: false
+
+    - name: Display effective MaxStartups
+      ansible.builtin.debug:
+        msg: "Effective SSH MaxStartups: {{ effective_maxstartups.stdout }}"
+
+    - name: Assert CIS 5.1.17 compliance
+      ansible.builtin.assert:
+        that:
+          - effective_maxstartups.stdout == "10:30:60"
+        success_msg: >-
+          CIS 5.1.17 compliant -
+          MaxStartups is {{ effective_maxstartups.stdout }}
+        fail_msg: >-
+          CIS 5.1.17 FAILED -
+          MaxStartups is {{ effective_maxstartups.stdout }},
+          expected 10:30:60 or more restrictive

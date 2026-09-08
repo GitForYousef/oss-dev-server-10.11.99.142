@@ -1,0 +1,53 @@
+---
+- name: CIS 1.7.2 - Ensure /etc/issue is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Configure /etc/issue with approved security banner
+      ansible.builtin.copy:
+        dest: /etc/issue
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          Authorized users only. All activity may be monitored and reported.
+
+    - name: Verify /etc/issue does not contain OS information escape sequences
+      ansible.builtin.shell: |
+        if grep -Pq '\\[mrsv]' /etc/issue; then
+          echo "FAIL: /etc/issue contains prohibited OS information escape sequences"
+          grep -nP '\\[mrsv]' /etc/issue
+          exit 1
+        else
+          echo "PASS: No prohibited OS information escape sequences found"
+          exit 0
+        fi
+      register: issue_escape_check
+      changed_when: false
+      failed_when: false
+
+    - name: Verify required banner text
+      ansible.builtin.shell: |
+        grep -Fq "Authorized users only. All activity may be monitored and reported." /etc/issue
+      register: issue_banner_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display /etc/issue verification
+      ansible.builtin.debug:
+        msg:
+          - "Banner:"
+          - "{{ lookup('ansible.builtin.file', '/etc/issue') }}"
+          - "Required banner present: {{ issue_banner_check.rc == 0 }}"
+          - "No OS escape sequences: {{ issue_escape_check.rc == 0 }}"
+
+    - name: Assert CIS 1.7.2 compliance
+      ansible.builtin.assert:
+        that:
+          - issue_banner_check.rc == 0
+          - issue_escape_check.rc == 0
+        success_msg: "CIS 1.7.2 compliant - /etc/issue is correctly configured"
+        fail_msg: "CIS 1.7.2 failed - /etc/issue requires review"

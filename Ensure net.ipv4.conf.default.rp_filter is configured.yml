@@ -1,0 +1,33 @@
+---
+- name: CIS 3.3.1.13 - Configure default reverse path filtering
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Configure net.ipv4.conf.default.rp_filter
+      ansible.posix.sysctl:
+        name: net.ipv4.conf.default.rp_filter
+        value: '1'
+        state: present
+        sysctl_file: /etc/sysctl.d/60-ipv4-default-rp-filter.conf
+        reload: false
+
+    - name: Apply default rp_filter setting immediately
+      ansible.builtin.command:
+        cmd: sysctl -w net.ipv4.conf.default.rp_filter=1
+      changed_when: false
+
+    - name: Verify runtime default rp_filter value
+      ansible.builtin.command:
+        cmd: sysctl -n net.ipv4.conf.default.rp_filter
+      register: rp_filter_check
+      changed_when: false
+
+    - name: Verify CIS 3.3.1.13 compliance
+      ansible.builtin.assert:
+        that:
+          - rp_filter_check.stdout | trim == '1'
+        fail_msg: "CIS 3.3.1.13 FAILED - default rp_filter is not set to 1."
+        success_msg: "CIS 3.3.1.13 COMPLIANT - default rp_filter is set to 1."

@@ -1,0 +1,88 @@
+---
+- name: CIS 3.3.1.7 - Ensure net.ipv4.icmp_echo_ignore_broadcasts is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Configure net.ipv4.icmp_echo_ignore_broadcasts
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/60-ipv4-icmp-echo-ignore-broadcasts.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # CIS 3.3.1.7
+          # Ensure net.ipv4.icmp_echo_ignore_broadcasts is configured
+          net.ipv4.icmp_echo_ignore_broadcasts = 1
+
+    - name: Remove broken GitLab sysctl symlink - kernel.sem
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.sem.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - kernel.shmall
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.shmall.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - kernel.shmmax
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-kernel.shmmax.conf
+        state: absent
+
+    - name: Remove broken GitLab sysctl symlink - net.core.somaxconn
+      ansible.builtin.file:
+        path: /etc/sysctl.d/90-omnibus-gitlab-net.core.somaxconn.conf
+        state: absent
+
+    - name: Apply icmp_echo_ignore_broadcasts setting immediately
+      ansible.builtin.command:
+        cmd: sysctl -w net.ipv4.icmp_echo_ignore_broadcasts=1
+      changed_when: false
+
+    - name: Verify runtime icmp_echo_ignore_broadcasts value
+      ansible.builtin.command:
+        cmd: sysctl -n net.ipv4.icmp_echo_ignore_broadcasts
+      register: icmp_broadcast_runtime
+      changed_when: false
+
+    - name: Verify persistent icmp_echo_ignore_broadcasts configuration
+      ansible.builtin.shell: |
+        grep -RniE \
+          '^[[:space:]]*net\.ipv4\.icmp_echo_ignore_broadcasts[[:space:]]*=[[:space:]]*1[[:space:]]*$' \
+          /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null
+      register: icmp_broadcast_config
+      changed_when: false
+      failed_when: false
+
+    - name: Check for incorrect icmp_echo_ignore_broadcasts values
+      ansible.builtin.shell: |
+        if grep -RniE \
+          '^[[:space:]]*net\.ipv4\.icmp_echo_ignore_broadcasts[[:space:]]*=[[:space:]]*(0|[2-9]|[1-9][0-9]+)[[:space:]]*$' \
+          /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null; then
+          exit 1
+        else
+          exit 0
+        fi
+      register: icmp_broadcast_bad
+      changed_when: false
+      failed_when: false
+
+    - name: Display CIS 3.3.1.7 verification
+      ansible.builtin.debug:
+        msg:
+          - "Runtime icmp_echo_ignore_broadcasts: {{ icmp_broadcast_runtime.stdout | trim }}"
+          - "Persistent configuration: {{ icmp_broadcast_config.stdout_lines }}"
+          - "Incorrect values detected: {{ icmp_broadcast_bad.rc != 0 }}"
+
+    - name: Assert CIS 3.3.1.7 compliance
+      ansible.builtin.assert:
+        that:
+          - icmp_broadcast_runtime.stdout | trim == "1"
+          - icmp_broadcast_config.rc == 0
+          - icmp_broadcast_config.stdout_lines | length >= 1
+          - icmp_broadcast_bad.rc == 0
+        success_msg: "CIS 3.3.1.7 compliant - net.ipv4.icmp_echo_ignore_broadcasts is configured to 1"
+        fail_msg: "CIS 3.3.1.7 failed - net.ipv4.icmp_echo_ignore_broadcasts requires review"

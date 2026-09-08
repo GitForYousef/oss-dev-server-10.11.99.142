@@ -1,0 +1,96 @@
+---
+- name: CIS 6.1.3 - Ensure cryptographic mechanisms protect audit tools
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Check if AIDE is installed
+      ansible.builtin.package_facts:
+        manager: auto
+
+    - name: Set AIDE installed fact
+      ansible.builtin.set_fact:
+        aide_installed: "{{ 'aide' in ansible_facts.packages }}"
+
+    - name: Fail if AIDE is not installed
+      ansible.builtin.fail:
+        msg: "AIDE is not installed. Install and initialize AIDE before remediating CIS 6.1.3."
+      when: not aide_installed
+
+    - name: Check that /etc/aide.conf exists
+      ansible.builtin.stat:
+        path: /etc/aide.conf
+      register: aide_conf
+
+    - name: Fail if /etc/aide.conf does not exist
+      ansible.builtin.fail:
+        msg: "/etc/aide.conf does not exist."
+      when: not aide_conf.stat.exists
+
+    - name: Determine actual sbin path
+      ansible.builtin.command:
+        cmd: readlink -f /sbin
+      register: sbin_path
+      changed_when: false
+
+    - name: Display actual sbin path
+      ansible.builtin.debug:
+        msg: "Audit tool path: {{ sbin_path.stdout }}"
+
+    - name: Check audit tool binaries
+      ansible.builtin.stat:
+        path: "{{ sbin_path.stdout }}/{{ item }}"
+      loop:
+        - auditctl
+        - auditd
+        - ausearch
+        - aureport
+        - autrace
+        - augenrules
+      register: audit_tool_files
+
+    - name: Create AIDE audit tools configuration
+      ansible.builtin.blockinfile:
+        path: /etc/aide.conf
+        marker: "# {mark} ANSIBLE CIS 6.1.3 AUDIT TOOLS"
+        insertafter: EOF
+        block: |
+          # Audit Tools
+          {{ sbin_path.stdout }}/auditctl p+i+n+u+g+s+b+acl+xattrs+sha512
+          {{ sbin_path.stdout }}/auditd p+i+n+u+g+s+b+acl+xattrs+sha512
+          {{ sbin_path.stdout }}/ausearch p+i+n+u+g+s+b+acl+xattrs+sha512
+          {{ sbin_path.stdout }}/aureport p+i+n+u+g+s+b+acl+xattrs+sha512
+          {{ sbin_path.stdout }}/autrace p+i+n+u+g+s+b+acl+xattrs+sha512
+          {{ sbin_path.stdout }}/augenrules p+i+n+u+g+s+b+acl+xattrs+sha512
+      notify: Validate AIDE configuration
+
+    - name: Flush handlers to validate AIDE configuration
+      ansible.builtin.meta: flush_handlers
+
+    - name: Verify audit tools are configured in AIDE
+      ansible.builtin.shell: |
+        grep -E '^[[:space:]]*{{ sbin_path.stdout | regex_escape }}/(auditctl|auditd|ausearch|aureport|autrace|augenrules)[[:space:]]+.*sha512' /etc/aide.conf
+      register: aide_audit_tools
+      changed_when: false
+      failed_when: false
+
+    - name: Display configured audit tools
+      ansible.builtin.debug:
+        var: aide_audit_tools.stdout_lines
+
+    - name: Assert audit tools are protected by AIDE
+      ansible.builtin.assert:
+        that:
+          - aide_audit_tools.rc == 0
+          - aide_audit_tools.stdout_lines | length >= 1
+        success_msg: "CIS 6.1.3 compliant - audit tools are configured in AIDE with SHA-512"
+        fail_msg: "CIS 6.1.3 failed - audit tools are not correctly configured in AIDE"
+
+  handlers:
+
+    - name: Validate AIDE configuration
+      ansible.builtin.command:
+        cmd: aide --config-check
+      changed_when: false

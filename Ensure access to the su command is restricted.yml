@@ -1,0 +1,58 @@
+---
+- name: CIS 5.2.7 - Ensure access to the su command is restricted
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    su_group: sugroup
+
+  tasks:
+
+    - name: Create empty su restriction group
+      ansible.builtin.group:
+        name: "{{ su_group }}"
+        state: present
+        system: true
+
+    - name: Ensure su restriction group has no members
+      ansible.builtin.shell:
+        cmd: |
+          gpasswd -M "" "{{ su_group }}"
+      changed_when: false
+
+    - name: Configure pam_wheel restriction for su
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/su
+        regexp: '^[[:space:]]*auth[[:space:]]+(required|requisite)[[:space:]]+pam_wheel\.so'
+        line: "auth required pam_wheel.so use_uid group={{ su_group }}"
+        insertbefore: BOF
+        backup: true
+
+    - name: Verify PAM configuration syntax
+      ansible.builtin.command:
+        cmd: grep -P '^[[:space:]]*auth[[:space:]]+(required|requisite)[[:space:]]+pam_wheel\.so.*group={{ su_group }}' /etc/pam.d/su
+      register: pam_wheel_config
+      changed_when: false
+      failed_when: pam_wheel_config.rc != 0
+
+    - name: Check su restriction group members
+      ansible.builtin.command:
+        cmd: getent group "{{ su_group }}"
+      register: su_group_info
+      changed_when: false
+
+    - name: Assert su restriction group is empty
+      ansible.builtin.assert:
+        that:
+          - su_group_info.stdout is defined
+          - (su_group_info.stdout.split(':')[3] | trim) == ""
+        success_msg: "CIS 5.2.7 compliant - su is restricted to empty group {{ su_group }}"
+        fail_msg: "CIS 5.2.7 failed - su restriction group is not empty"
+
+    - name: Assert PAM su restriction is configured
+      ansible.builtin.assert:
+        that:
+          - pam_wheel_config.rc == 0
+        success_msg: "CIS 5.2.7 PAM restriction is correctly configured"
+        fail_msg: "CIS 5.2.7 PAM pam_wheel.so restriction is missing"

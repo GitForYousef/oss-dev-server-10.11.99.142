@@ -1,0 +1,50 @@
+---
+- name: CIS 1.1.2.1.1 - Ensure /tmp is a separate partition
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Unmask tmp.mount
+      ansible.builtin.systemd:
+        name: tmp.mount
+        masked: false
+
+    - name: Configure /tmp as tmpfs in fstab
+      ansible.builtin.mount:
+        path: /tmp
+        src: tmpfs
+        fstype: tmpfs
+        opts: defaults,rw,nosuid,nodev,noexec,relatime
+        dump: "0"
+        passno: "0"
+        state: present
+
+    - name: Mount /tmp
+      ansible.builtin.mount:
+        path: /tmp
+        src: tmpfs
+        fstype: tmpfs
+        opts: defaults,rw,nosuid,nodev,noexec,relatime
+        dump: "0"
+        passno: "0"
+        state: mounted
+
+    - name: Verify /tmp is a separate filesystem
+      ansible.builtin.command:
+        cmd: findmnt -nk /tmp
+      register: tmp_mount_check
+      changed_when: false
+
+    - name: Display /tmp mount
+      ansible.builtin.debug:
+        msg: "{{ tmp_mount_check.stdout }}"
+
+    - name: Assert CIS 1.1.2.1.1 compliance
+      ansible.builtin.assert:
+        that:
+          - tmp_mount_check.rc == 0
+          - tmp_mount_check.stdout is search('/tmp')
+        success_msg: "CIS 1.1.2.1.1 compliant - /tmp is mounted as a separate filesystem"
+        fail_msg: "CIS 1.1.2.1.1 failed - /tmp is not mounted separately"

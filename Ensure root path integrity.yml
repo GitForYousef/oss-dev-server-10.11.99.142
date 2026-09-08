@@ -1,0 +1,145 @@
+---
+- name: CIS 5.4.2.5 - Ensure root path integrity
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Remove /root/bin from root bash configuration
+      ansible.builtin.replace:
+        path: "{{ item }}"
+        regexp: '(^|:)/root/bin(:|$)'
+        replace: '\1'
+      loop:
+        - /root/.bashrc
+        - /root/.bash_profile
+        - /root/.profile
+      failed_when: false
+
+    - name: Remove /root/bin from system profile files
+      ansible.builtin.replace:
+        path: "{{ item }}"
+        regexp: '(^|:)/root/bin(:|$)'
+        replace: '\1'
+      loop:
+        - /etc/profile
+        - /etc/bashrc
+      failed_when: false
+
+    - name: Remove /root/bin from profile.d files
+      ansible.builtin.replace:
+        path: "{{ item }}"
+        regexp: '(^|:)/root/bin(:|$)'
+        replace: '\1'
+      loop: "{{ lookup('ansible.builtin.fileglob', '/etc/profile.d/*.sh', wantlist=True) }}"
+      failed_when: false
+
+    - name: Configure a clean PATH for root login shell
+      ansible.builtin.blockinfile:
+        path: /root/.bash_profile
+        marker: "# {mark} ANSIBLE CIS 5.4.2.5 ROOT PATH"
+        create: true
+        owner: root
+        group: root
+        mode: '0644'
+        block: |
+          # CIS 5.4.2.5 - secure root PATH
+          PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/usr/share/Modules/bin"
+          export PATH
+
+    - name: Build clean root login PATH
+      ansible.builtin.shell: |
+        env -i \
+          HOME=/root \
+          USER=root \
+          LOGNAME=root \
+          SHELL=/bin/bash \
+          PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin \
+          /bin/bash --login -c 'printf "%s" "$PATH"'
+      args:
+        executable: /bin/bash
+      register: root_path
+      changed_when: false
+
+    - name: Verify root PATH integrity
+      ansible.builtin.shell: |
+        set -u
+
+        PATH_VALUE="{{ root_path.stdout | trim }}"
+        BAD=0
+
+        OLDIFS="$IFS"
+        IFS=':'
+
+        for DIR in $PATH_VALUE; do
+
+          if [ -z "$DIR" ]; then
+            echo "FAIL: empty PATH entry"
+            BAD=1
+            continue
+          fi
+
+          if [ "$DIR" = "." ]; then
+            echo "FAIL: current directory '.' in root PATH"
+            BAD=1
+            continue
+          fi
+
+          case "$DIR" in
+            /*)
+              if [ ! -d "$DIR" ]; then
+                echo "FAIL: $DIR is not a directory"
+                BAD=1
+                continue
+              fi
+
+              OWNER=$(stat -c '%U' "$DIR")
+              MODE=$(stat -c '%a' "$DIR")
+
+              if [ "$OWNER" != "root" ]; then
+                echo "FAIL: $DIR is not owned by root"
+                BAD=1
+              fi
+
+              if [ $((8#$MODE & 0022)) -ne 0 ]; then
+                echo "FAIL: $DIR is writable by group/other"
+                BAD=1
+              fi
+              ;;
+
+            *)
+              echo "FAIL: relative PATH entry '$DIR'"
+              BAD=1
+              ;;
+          esac
+
+        done
+
+        IFS="$OLDIFS"
+
+        if [ "$BAD" -eq 0 ]; then
+          echo "PASS: root PATH integrity verified"
+          exit 0
+        fi
+
+        exit 1
+      args:
+        executable: /bin/bash
+      register: path_check
+      changed_when: false
+
+    - name: Display effective root PATH
+      ansible.builtin.debug:
+        msg: "{{ root_path.stdout }}"
+
+    - name: Display PATH verification
+      ansible.builtin.debug:
+        var: path_check.stdout_lines
+
+    - name: Assert CIS 5.4.2.5 compliance
+      ansible.builtin.assert:
+        that:
+          - path_check.rc == 0
+        success_msg: "CIS 5.4.2.5 compliant - root PATH integrity verified"
+        fail_msg: "CIS 5.4.2.5 failed - unsafe root PATH entry detected"

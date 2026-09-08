@@ -1,0 +1,20 @@
+---
+- name: CIS 2.4.1.2 - Ensure access to /etc/crontab is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Check if /etc/crontab exists
+      ansible.builtin.stat:
+        path: /etc/crontab
+      register: crontab_file
+
+    - name: Set ownership and permissions on /etc/crontab
+      ansible.builtin.file:
+        path: /etc/crontab
+        owner: root
+        group: root
+        mode: '0600'
+      when: crontab_file.stat.exists

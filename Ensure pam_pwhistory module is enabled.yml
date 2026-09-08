@@ -1,0 +1,61 @@
+---
+- name: CIS 5.3.2.4 - Ensure pam_pwhistory module is enabled
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Check active authselect profile
+      ansible.builtin.command:
+        cmd: authselect current -r
+      register: authselect_profile
+      changed_when: false
+
+    - name: Check whether with-pwhistory feature is enabled
+      ansible.builtin.command:
+        cmd: authselect current -r
+      register: authselect_features
+      changed_when: false
+
+    - name: Enable authselect with-pwhistory feature
+      ansible.builtin.command:
+        cmd: authselect enable-feature with-pwhistory
+      when: "'with-pwhistory' not in authselect_features.stdout"
+      register: pwhistory_feature
+      changed_when: true
+
+    - name: Apply authselect changes
+      ansible.builtin.command:
+        cmd: authselect apply-changes
+      when: pwhistory_feature is changed
+
+    - name: Verify pam_pwhistory in password-auth
+      ansible.builtin.shell:
+        cmd: |
+          grep -Pq '^\s*password\s+(requisite|required)\s+pam_pwhistory\.so\b' \
+            /etc/pam.d/password-auth
+      register: password_auth_pwhistory
+      changed_when: false
+      failed_when: false
+
+    - name: Verify pam_pwhistory in system-auth
+      ansible.builtin.shell:
+        cmd: |
+          grep -Pq '^\s*password\s+(requisite|required)\s+pam_pwhistory\.so\b' \
+            /etc/pam.d/system-auth
+      register: system_auth_pwhistory
+      changed_when: false
+      failed_when: false
+
+    - name: Assert CIS 5.3.2.4 compliance
+      ansible.builtin.assert:
+        that:
+          - password_auth_pwhistory.rc == 0
+          - system_auth_pwhistory.rc == 0
+        success_msg: >-
+          CIS 5.3.2.4 compliant -
+          pam_pwhistory.so is enabled in password-auth and system-auth
+        fail_msg: >-
+          CIS 5.3.2.4 failed -
+          pam_pwhistory.so is missing from one or more PAM configuration files

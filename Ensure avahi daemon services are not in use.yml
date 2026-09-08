@@ -1,0 +1,59 @@
+---
+- name: CIS 2.1.2 - Ensure avahi daemon services are not in use
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+
+    - name: Check if avahi-daemon service exists
+      ansible.builtin.systemd:
+        name: avahi-daemon.service
+      register: avahi_service
+      failed_when: false
+      changed_when: false
+
+    - name: Stop and disable avahi-daemon service
+      ansible.builtin.systemd:
+        name: avahi-daemon.service
+        state: stopped
+        enabled: false
+        masked: true
+      when: avahi_service.status.LoadState is defined and
+            avahi_service.status.LoadState != "not-found"
+
+    - name: Check if avahi-daemon socket exists
+      ansible.builtin.systemd:
+        name: avahi-daemon.socket
+      register: avahi_socket
+      failed_when: false
+      changed_when: false
+
+    - name: Stop and disable avahi-daemon socket
+      ansible.builtin.systemd:
+        name: avahi-daemon.socket
+        state: stopped
+        enabled: false
+        masked: true
+      when: avahi_socket.status.LoadState is defined and
+            avahi_socket.status.LoadState != "not-found"
+
+    - name: Verify avahi-daemon service is not active
+      ansible.builtin.command:
+        cmd: systemctl is-active avahi-daemon.service
+      register: verify_avahi_service
+      failed_when: false
+      changed_when: false
+
+    - name: Verify avahi-daemon socket is not active
+      ansible.builtin.command:
+        cmd: systemctl is-active avahi-daemon.socket
+      register: verify_avahi_socket
+      failed_when: false
+      changed_when: false
+
+    - name: Display Avahi status
+      ansible.builtin.debug:
+        msg:
+          - "avahi-daemon.service status: {{ verify_avahi_service.stdout }}"
+          - "avahi-daemon.socket status: {{ verify_avahi_socket.stdout }}"

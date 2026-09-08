@@ -1,0 +1,33 @@
+---
+- name: CIS 3.3.1.17 - Ensure default IPv4 martian packets are logged
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Configure net.ipv4.conf.default.log_martians
+      ansible.posix.sysctl:
+        name: net.ipv4.conf.default.log_martians
+        value: '1'
+        state: present
+        sysctl_file: /etc/sysctl.d/60-ipv4-default-log-martians.conf
+        reload: false
+
+    - name: Apply default log_martians setting immediately
+      ansible.builtin.command:
+        cmd: sysctl -w net.ipv4.conf.default.log_martians=1
+      changed_when: false
+
+    - name: Verify runtime default log_martians value
+      ansible.builtin.command:
+        cmd: sysctl -n net.ipv4.conf.default.log_martians
+      register: log_martians_check
+      changed_when: false
+
+    - name: Verify CIS 3.3.1.17 compliance
+      ansible.builtin.assert:
+        that:
+          - log_martians_check.stdout | trim == '1'
+        fail_msg: "CIS 3.3.1.17 FAILED - default log_martians is not set to 1."
+        success_msg: "CIS 3.3.1.17 COMPLIANT - default log_martians is set to 1."

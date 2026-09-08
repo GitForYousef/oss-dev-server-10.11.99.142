@@ -1,0 +1,145 @@
+---
+- name: CIS 7.2.9 - Ensure local interactive user dot files access is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    # ============================================================
+    # 1. Check the exact files reported by Tenable
+    # ============================================================
+    - name: Check Tenable reported dot files
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      loop:
+        - path: /home/usman/backup/fe/node_modules/leaflet.markercluster/.travis.yml
+          owner: usman
+          group: usman
+          mode: "0644"
+
+        - path: /home/sameer/backup/node_modules/json-stable-stringify-without-jsonify/.travis.yml
+          owner: sameer
+          group: sameer
+          mode: "0644"
+
+      register: tenable_dot_files
+
+    # ============================================================
+    # 2. Fix Usman .travis.yml
+    # ============================================================
+    - name: Fix usman .travis.yml permissions and ownership
+      ansible.builtin.file:
+        path: /home/usman/backup/fe/node_modules/leaflet.markercluster/.travis.yml
+        owner: usman
+        group: usman
+        mode: "0644"
+      when: tenable_dot_files.results[0].stat.exists
+
+    # ============================================================
+    # 3. Fix Sameer .travis.yml
+    # ============================================================
+    - name: Fix sameer .travis.yml permissions and ownership
+      ansible.builtin.file:
+        path: /home/sameer/backup/node_modules/json-stable-stringify-without-jsonify/.travis.yml
+        owner: sameer
+        group: sameer
+        mode: "0644"
+      when: tenable_dot_files.results[1].stat.exists
+
+    # ============================================================
+    # 4. Check for dangerous .forward and .rhost files
+    #
+    # CIS says these should be investigated and manually deleted.
+    # We report them rather than blindly deleting application files.
+    # ============================================================
+    - name: Find .forward and .rhost files
+      ansible.builtin.shell: |
+        find /home /var/lib/pgsql /var/opt/gitlab \
+          -xdev -type f \( -name ".forward" -o -name ".rhost" \) \
+          -print 2>/dev/null
+      register: dangerous_dot_files
+      changed_when: false
+
+    - name: Display .forward and .rhost files for review
+      ansible.builtin.debug:
+        msg:
+          - "WARNING - Review the following .forward/.rhost files:"
+          - "{{ dangerous_dot_files.stdout_lines }}"
+      when: dangerous_dot_files.stdout_lines | length > 0
+
+    # ============================================================
+    # 5. Verify Usman file
+    # ============================================================
+    - name: Verify usman .travis.yml
+      ansible.builtin.stat:
+        path: /home/usman/backup/fe/node_modules/leaflet.markercluster/.travis.yml
+      register: verify_usman
+
+    # ============================================================
+    # 6. Verify Sameer file
+    # ============================================================
+    - name: Verify sameer .travis.yml
+      ansible.builtin.stat:
+        path: /home/sameer/backup/node_modules/json-stable-stringify-without-jsonify/.travis.yml
+      register: verify_sameer
+
+    # ============================================================
+    # 7. Display final verification
+    # ============================================================
+    - name: Display CIS 7.2.9 verification
+      ansible.builtin.debug:
+        msg:
+          - >-
+            usman .travis.yml:
+            exists={{ verify_usman.stat.exists | default(false) }},
+            owner={{ verify_usman.stat.pw_name | default('N/A') }},
+            group={{ verify_usman.stat.gr_name | default('N/A') }},
+            mode={{ verify_usman.stat.mode | default('N/A') }}
+
+          - >-
+            sameer .travis.yml:
+            exists={{ verify_sameer.stat.exists | default(false) }},
+            owner={{ verify_sameer.stat.pw_name | default('N/A') }},
+            group={{ verify_sameer.stat.gr_name | default('N/A') }},
+            mode={{ verify_sameer.stat.mode | default('N/A') }}
+
+          - >-
+            .forward/.rhost files found:
+            {{ dangerous_dot_files.stdout_lines | length }}
+
+    # ============================================================
+    # 8. Assert Usman file compliance
+    # ============================================================
+    - name: Assert usman dot file is compliant
+      ansible.builtin.assert:
+        that:
+          - verify_usman.stat.exists
+          - verify_usman.stat.pw_name == "usman"
+          - verify_usman.stat.gr_name == "usman"
+          - (verify_usman.stat.mode | int(base=8)) <= 644
+        success_msg: "usman .travis.yml is CIS 7.2.9 compliant"
+        fail_msg: "usman .travis.yml is NOT CIS 7.2.9 compliant"
+
+    # ============================================================
+    # 9. Assert Sameer file compliance
+    # ============================================================
+    - name: Assert sameer dot file is compliant
+      ansible.builtin.assert:
+        that:
+          - verify_sameer.stat.exists
+          - verify_sameer.stat.pw_name == "sameer"
+          - verify_sameer.stat.gr_name == "sameer"
+          - (verify_sameer.stat.mode | int(base=8)) <= 644
+        success_msg: "sameer .travis.yml is CIS 7.2.9 compliant"
+        fail_msg: "sameer .travis.yml is NOT CIS 7.2.9 compliant"
+
+    # ============================================================
+    # 10. Final compliance message
+    # ============================================================
+    - name: CIS 7.2.9 compliance summary
+      ansible.builtin.debug:
+        msg: >-
+          CIS 7.2.9 targeted remediation completed.
+          Tenable-reported dot files have been corrected to
+          user ownership and 0644 permissions.

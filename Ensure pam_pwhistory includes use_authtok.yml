@@ -1,0 +1,94 @@
+---
+- name: CIS 5.3.3.3.3 - Ensure pam_pwhistory includes use_authtok
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Get active authselect profile
+      ansible.builtin.command:
+        cmd: head -1 /etc/authselect/authselect.conf
+      register: authselect_profile
+      changed_when: false
+
+    - name: Determine authselect profile path
+      ansible.builtin.set_fact:
+        authselect_profile_path: >-
+          {{
+            '/etc/authselect/' + authselect_profile.stdout
+            if authselect_profile.stdout is match('^custom/')
+            else '/usr/share/authselect/default/' + authselect_profile.stdout
+          }}
+
+    - name: Check system-auth template for use_authtok
+      ansible.builtin.shell:
+        cmd: |
+          grep -Pq '^\s*password\s+(requisite|required|sufficient)\s+pam_pwhistory\.so\s+([^#\r\n]+\s+)?use_authtok\b' \
+            "{{ authselect_profile_path }}/system-auth"
+      register: system_auth_use_authtok
+      changed_when: false
+      failed_when: false
+
+    - name: Check password-auth template for use_authtok
+      ansible.builtin.shell:
+        cmd: |
+          grep -Pq '^\s*password\s+(requisite|required|sufficient)\s+pam_pwhistory\.so\s+([^#\r\n]+\s+)?use_authtok\b' \
+            "{{ authselect_profile_path }}/password-auth"
+      register: password_auth_use_authtok
+      changed_when: false
+      failed_when: false
+
+    - name: Add use_authtok to system-auth template
+      ansible.builtin.replace:
+        path: "{{ authselect_profile_path }}/system-auth"
+        regexp: '^(\s*password\s+(?:requisite|required|sufficient)\s+pam_pwhistory\.so(?!.*\buse_authtok\b).*)$'
+        replace: '\1 use_authtok'
+        backup: true
+      when: system_auth_use_authtok.rc != 0
+
+    - name: Add use_authtok to password-auth template
+      ansible.builtin.replace:
+        path: "{{ authselect_profile_path }}/password-auth"
+        regexp: '^(\s*password\s+(?:requisite|required|sufficient)\s+pam_pwhistory\.so(?!.*\buse_authtok\b).*)$'
+        replace: '\1 use_authtok'
+        backup: true
+      when: password_auth_use_authtok.rc != 0
+
+    - name: Apply authselect changes
+      ansible.builtin.command:
+        cmd: authselect apply-changes
+      register: authselect_apply
+      changed_when: true
+      when:
+        - system_auth_use_authtok.rc != 0 or password_auth_use_authtok.rc != 0
+
+    - name: Verify system-auth
+      ansible.builtin.shell:
+        cmd: |
+          grep -Pq '^\s*password\s+(requisite|required|sufficient)\s+pam_pwhistory\.so(\s+[^#\r\n]+)?\s+use_authtok\b' \
+            /etc/pam.d/system-auth
+      register: system_auth_verify
+      changed_when: false
+      failed_when: system_auth_verify.rc != 0
+
+    - name: Verify password-auth
+      ansible.builtin.shell:
+        cmd: |
+          grep -Pq '^\s*password\s+(requisite|required|sufficient)\s+pam_pwhistory\.so(\s+[^#\r\n]+)?\s+use_authtok\b' \
+            /etc/pam.d/password-auth
+      register: password_auth_verify
+      changed_when: false
+      failed_when: password_auth_verify.rc != 0
+
+    - name: Assert CIS 5.3.3.3.3 compliance
+      ansible.builtin.assert:
+        that:
+          - system_auth_verify.rc == 0
+          - password_auth_verify.rc == 0
+        success_msg: >-
+          CIS 5.3.3.3.3 compliant -
+          pam_pwhistory includes use_authtok in system-auth and password-auth
+        fail_msg: >-
+          CIS 5.3.3.3.3 failed -
+          pam_pwhistory use_authtok is missing from one or more PAM files

@@ -1,0 +1,83 @@
+---
+- name: CIS 1.5.10 - Ensure systemd-coredump Storage is configured
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Create systemd coredump configuration directory
+      ansible.builtin.file:
+        path: /etc/systemd/coredump.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Find existing systemd coredump configuration files
+      ansible.builtin.find:
+        paths: /etc/systemd/coredump.conf.d
+        patterns:
+          - '*.conf'
+        file_type: file
+      register: coredump_conf_files
+
+    - name: Comment out existing Storage settings
+      ansible.builtin.replace:
+        path: "{{ item.path }}"
+        regexp: '^(\s*[Ss]torage\s*=.*)$'
+        replace: '# \1'
+        backup: true
+      loop: "{{ coredump_conf_files.files }}"
+      failed_when: false
+
+    - name: Configure systemd coredump Storage as none
+      ansible.builtin.copy:
+        dest: /etc/systemd/coredump.conf.d/60-coredump.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # CIS 1.5.10
+          # Ensure systemd-coredump Storage is configured
+          [Coredump]
+          Storage=none
+
+    - name: Reload systemd manager configuration
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart systemd-coredump socket
+      ansible.builtin.systemd:
+        name: systemd-coredump.socket
+        state: restarted
+
+    - name: Verify coredump Storage configuration
+      ansible.builtin.shell: |
+        grep -nE '^[[:space:]]*Storage[[:space:]]*=[[:space:]]*none[[:space:]]*$' \
+        /etc/systemd/coredump.conf.d/*.conf
+      register: coredump_storage_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display coredump Storage configuration
+      ansible.builtin.debug:
+        var: coredump_storage_check.stdout_lines
+
+    - name: Check effective systemd coredump configuration
+      ansible.builtin.command:
+        cmd: systemd-analyze cat-config systemd/coredump.conf
+      register: effective_coredump_config
+      changed_when: false
+      failed_when: false
+
+    - name: Display effective coredump configuration
+      ansible.builtin.debug:
+        var: effective_coredump_config.stdout_lines
+
+    - name: Assert CIS 1.5.10 compliance
+      ansible.builtin.assert:
+        that:
+          - coredump_storage_check.stdout_lines | length >= 1
+        success_msg: "CIS 1.5.10 compliant - systemd-coredump Storage is configured as none"
+        fail_msg: "CIS 1.5.10 failed - Storage=none was not found"
