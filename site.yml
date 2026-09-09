@@ -1,4 +1,5 @@
 ---
+- import_playbook: "ol8-stig-remediation.yml"
 - import_playbook: "Ensure access to at is configured.yml"
 - import_playbook: "Ensure access to crontab is configured.yml"
 - import_playbook: "Ensure access to etc cron.d is configured.yml"
